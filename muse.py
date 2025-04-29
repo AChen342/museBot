@@ -1,7 +1,13 @@
+'''
+Author: Andrew Chen
+Date: 04/29/2025
+Description: Main Muse bot program.
+'''
 import discord
 import os
 from discord.ext import commands
 from dotenv import load_dotenv
+import asyncio
 
 # Load .env variables
 load_dotenv()
@@ -20,64 +26,12 @@ tree = bot.tree
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
-    #need to sync tree so that custom slash commands will appear in Discord
-    try:
-        synced = await tree.sync() #sync slash commands
-        print(f"Successfully synced {len(synced)} slash commands.")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
 
-    print('------')
-
-#repeat command
-@tree.command(name="repeat", description="repeats a message a number of times")
-async def repeat(interaction: discord.Interaction, times: int, message: str = "repeating..."):
-    MAX_REPEAT = 10
-
-    # limits repeat amount to 10
-    try:
-        if times > MAX_REPEAT:
-            await interaction.response.send_message("Number of repetitions cannot exceed 10.")
-
-        else:
-            await interaction.response.defer()
-
-            for i in range(times):
-                await interaction.channel.send(message)
-
-            await interaction.followup.send("Done!", ephemeral=True)
-    
-    except Exception as e:
-        await interaction.response.send_message("Command failed.")
-        print(f"Failed to execute command: {e}")
-
-#basic arithmetic command
-'''
-@tree.command()
-async def calc(ctx, op, x:int, y:int):
-    result = 0
-
-    match op:
-        case "add":
-            result=x+y
-        case "sub":
-            result=x-y
-        case "mult":
-            result=x*y
-        case "div":
-            if y==0:
-                result="Undefined"
-            else:
-                result=x/y
-        case "mod":
-            result=x%y
-        case "pow":
-            result=x**y
-        case _:
-            result= "Undefined operation"
-
-    await ctx.send(result)
-'''
+#load cog
+async def main():
+    async with bot:
+        await bot.load_extension("basic")
+        await bot.start(TOKEN)
 
 # requires bot token to run
-bot.run(TOKEN)
+asyncio.run(main())
