@@ -5,9 +5,10 @@ Description: Contains basic commands for Muse bot
 '''
 
 import discord
+import math
+import random
 from discord.ext import commands
 from discord import app_commands
-import math
 
 class Basic(commands.Cog):
     def __init__(self, bot):
@@ -35,7 +36,7 @@ class Basic(commands.Cog):
             await interaction.response.send_message("Command failed.")
             print(f"Failed to execute command: {e}")
     
-    @app_commands.command(name="intcalc", description="command for basic integer arithmetic")
+    @app_commands.command(name="math", description="command for basic integer arithmetic")
     async def math(self, interaction: discord.Interaction, op:str, x:int, y:int):
         result = 0
 
@@ -64,6 +65,49 @@ class Basic(commands.Cog):
         await interaction.channel.send(f"Answer: {result}")
         await interaction.followup.send("Done!")
                 
+    @app_commands.command(name="guess", description="simple guessing game")
+    async def guess(self, interaction: discord.Interaction):
+        #generate number
+        rand = random.randint(1, 10)
+        numGuesses = 3
+        correct = False
+
+        #start game
+        await interaction.response.send_message("I'm thinking of a number between 1-10...")
+
+        #makes sure guess is from same user and in the same channel
+        def check(message: discord.Message):
+            return message.author == interaction.user and message.channel == interaction.channel
+        
+        try:
+            while not correct and numGuesses > 0:
+                #waits for a message, checks if it is from same user in same channel, sets a 30s timer.
+                message = await self.bot.wait_for("message", check=check, timeout=30.0)
+
+                #get message text
+                user_guess = message.content
+
+                #checks if user guess is valid, meaning guess is integer value and between 1-10
+                if (not user_guess.isdigit()) or (int(user_guess) < 1 or int(user_guess) > 10) :
+                    await interaction.followup.send(f"Invalid guess! Please enter a number between 1-10.")                    
+                else:
+                    user_guess = int(user_guess)
+
+                    if user_guess == rand:
+                        await interaction.followup.send(f"Winner! The number I was thinking of was {rand}.")
+                        correct = True
+                    else:
+                        #decrement num guesses remaining
+                        numGuesses-=1
+
+                        #game over if player is not able to guess number in three turns.
+                        if numGuesses == 0:
+                            await interaction.followup.send(f"Game over! The number I was thinking of was {rand}.")
+                        else:
+                            await interaction.followup.send(f"Incorrect guess! You have {numGuesses} guesses.")
+
+        except TimeoutError:
+            await interaction.followup.send("You took too long to respond!")
 
     #syncs commands to Discord
     @commands.Cog.listener()
