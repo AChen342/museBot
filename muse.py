@@ -31,6 +31,7 @@ async def on_ready():
 async def main():
     async with bot:
         await bot.load_extension("basic")
+        await bot.load_extension("wordle")
         await bot.start(TOKEN)
 
 # requires bot token to run

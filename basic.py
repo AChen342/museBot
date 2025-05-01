@@ -108,7 +108,7 @@ class Basic(commands.Cog):
 
         except TimeoutError:
             await interaction.followup.send("You took too long to respond!")
-
+    
     #syncs commands to Discord
     @commands.Cog.listener()
     async def on_ready(self):
