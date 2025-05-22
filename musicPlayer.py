@@ -17,13 +17,21 @@ class MusicControls(discord.ui.View):
     async def skip_button(self, interaction, button):
         await self.musicPlayer.skip(interaction)
 
-    @discord.ui.button(label="Stop", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="End", style=discord.ButtonStyle.red)
     async def stop_button(self, interaction, button):
-        await self.musicPlayer.stop(interaction)
+        await self.musicPlayer.end(interaction)
 
-    @discord.ui.button(label="Queue", style=discord.ButtonStyle.green)
-    async def view_button(self, interaction, button):
-        await self.musicPlayer.view(interaction)
+    @discord.ui.button(label="View Queue", style=discord.ButtonStyle.green)
+    async def view_queue_button(self, interaction, button):
+        await self.musicPlayer.view_queue(interaction)
+
+    @discord.ui.button(label="Pause", style=discord.ButtonStyle.gray)
+    async def pause_button(self, interaction, button):
+        await self.musicPlayer.pause(interaction)
+
+    @discord.ui.button(label="Resume", style=discord.ButtonStyle.blurple)
+    async def resume_button(self, interaction, button):
+        await self.musicPlayer.resume(interaction)
 
 
 class MusicPlayer(commands.Cog):
@@ -40,6 +48,24 @@ class MusicPlayer(commands.Cog):
             print(f"successfully synced music commands")
         except Exception as e:
             print(f"Failed to sync music commands due to: {e}")
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member, before, after):
+        if not member.guild:
+            return
+        
+        voice_client = member.guild.voice_client
+        if not voice_client or not voice_client.is_connected():
+            return
+        
+        channel = voice_client.channel
+        if not channel:
+            return
+
+        non_bot_members = [m for m in channel.members if not m.bot]
+        if len(non_bot_members) == 0:
+            await voice_client.disconnect()
+
 
     async def to_queue(self, server_name, source):
         # adds song to queue
@@ -61,7 +87,7 @@ class MusicPlayer(commands.Cog):
 
         self.prev_song = self.current_song
 
-        audio_url, title = queue.pop()
+        audio_url, _ = queue.pop()
 
         FFMPEG_PATH = os.path.join(
             os.path.dirname(__file__),
@@ -141,7 +167,7 @@ class MusicPlayer(commands.Cog):
                 await interaction.followup.send(f"Added {self.current_song} to queue.")
 
                 # plays next song in queue
-                if not voice_client.is_playing():
+                if not voice_client.is_playing() and not voice_client.is_paused():
                     await self.play_next(interaction)
 
         except Exception as e:
@@ -149,7 +175,24 @@ class MusicPlayer(commands.Cog):
             if voice_client and voice_client.is_connected():
                 await voice_client.disconnect()
 
-    async def view(self, interaction: discord.Interaction):
+    async def resume(self, interaction: discord.Interaction):
+        voice_client = interaction.guild.voice_client
+        if voice_client and voice_client.is_paused():
+            voice_client.resume()
+            await interaction.response.send_message("Resumed music.")
+        else:
+            await interaction.response.send_message("Nothing is paused.")
+
+    async def pause(self, interaction: discord.Interaction):
+        voice_client = interaction.guild.voice_client
+        if voice_client and voice_client.is_playing():
+            voice_client.pause()
+            self.paused = True
+            await interaction.response.send_message("Paused music.")
+        else:
+            await interaction.response.send_message("Nothing is playing.")
+
+    async def view_queue(self, interaction: discord.Interaction):
         server_name = interaction.guild.name
         queue = self.queues[server_name]
         msg = "Next on your queue:\n"
@@ -172,10 +215,14 @@ class MusicPlayer(commands.Cog):
         if voice_client and voice_client.is_playing():
             voice_client.stop()
             await interaction.response.send_message(f"Skipped {self.prev_song}.")
+        elif voice_client and voice_client.is_paused():
+            voice_client.resume()
+            voice_client.stop()
+            await interaction.response.send_message(f"Skipped {self.prev_song}.")
         else:
             await interaction.response.send_message("Nothing is playing.")
 
-    async def stop(self, interaction: discord.Interaction):
+    async def end(self, interaction: discord.Interaction):
         voice_client = interaction.guild.voice_client
 
         if not voice_client or not voice_client.is_connected():
