@@ -30,8 +30,8 @@ async def on_ready():
 #load cog
 async def main():
     async with bot:
-        #await bot.load_extension("basic")
-        await bot.load_extension("wordle")
+        await bot.load_extension("music")
+        await bot.load_extension("basic")
         await bot.start(TOKEN)
 
 # requires bot token to run

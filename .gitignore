@@ -4,4 +4,11 @@
 ### dotenv ###
 .env
 
+### python files ###
+wordle.py
+basic.py
+
+### text files ###
+wordlist.txt
+
 # End of https://www.toptal.com/developers/gitignore/api/dotenv
