@@ -4,11 +4,11 @@
 ### dotenv ###
 .env
 
-### python files ###
-wordle.py
-basic.py
+# Python cache
+__pycache__/
+*.pyc
 
-### text files ###
-wordlist.txt
+# VS Code settings
+.vscode/
 
 # End of https://www.toptal.com/developers/gitignore/api/dotenv

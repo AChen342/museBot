@@ -12,14 +12,14 @@ import asyncio
 # Load .env variables
 load_dotenv()
 
-#bot info
+# bot info
 TOKEN = os.getenv('TOKEN')
 APP_ID = os.getenv('APP_ID')
 
 intents = discord.Intents.default()
-#manages new slash commands
+# manages new slash commands
 intents.message_content = True
-#don't use both client and bot, use one otherwise the bot won't work
+# don't use both client and bot, use one otherwise the bot won't work
 bot = commands.Bot(command_prefix="!", intents=intents, application_id=APP_ID)
 tree = bot.tree
 
@@ -27,11 +27,10 @@ tree = bot.tree
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
 
-#load cog
+# load cog
 async def main():
     async with bot:
-        await bot.load_extension("music")
-        await bot.load_extension("basic")
+        await bot.load_extension("musicPlayer")
         await bot.start(TOKEN)
 
 # requires bot token to run
