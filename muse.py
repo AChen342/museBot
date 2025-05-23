@@ -8,7 +8,6 @@ import os
 from discord.ext import commands
 from dotenv import load_dotenv
 import asyncio
-import webserver
 
 # Load .env variables
 load_dotenv()
@@ -33,7 +32,6 @@ async def main():
     async with bot:
         await bot.load_extension("musicPlayer")
         await bot.load_extension("utils")
-        webserver.keep_alive()
         await bot.start(TOKEN)
 
 # requires bot token to run
