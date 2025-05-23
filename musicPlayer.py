@@ -96,7 +96,7 @@ class MusicPlayer(commands.Cog):
             'ffmpeg.exe'
         )
         '''
-        FFMPEG_PATH = 'ffmpeg'
+        FFMPEG_PATH = './bin/ffmpeg'
 
         FFMPEG_OPTIONS = {
             'executable': FFMPEG_PATH,
