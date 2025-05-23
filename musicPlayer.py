@@ -150,7 +150,6 @@ class MusicPlayer(commands.Cog):
             COOKIES_PATH = os.path.join(os.path.dirname(__file__), 'cookies.txt')
             YDL_OPTIONS = {
                 'format': 'bestaudio/best',
-                'extract_flat': True,
                 'quiet': True,
                 'no_warnings': True,
                 'cookies': COOKIES_PATH
