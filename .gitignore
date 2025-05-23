@@ -12,6 +12,9 @@ __pycache__/
 .vscode/
 
 # text files
-.txt
+*.txt
+
+# vbs
+*.vbs
 
 # End of https://www.toptal.com/developers/gitignore/api/dotenv
