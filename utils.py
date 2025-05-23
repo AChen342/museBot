@@ -42,6 +42,11 @@ class Utils(commands.Cog):
             return f"{match.group(1)} ms"
         else:
             return "No connection"
+        
+    @app_commands.command(name="invite", description="shows bot invite link")
+    async def invite(self, interaction: discord.Interaction):
+        bot_link = "https://discord.com/oauth2/authorize?client_id=1366550966350123018"
+        await interaction.response.send_message(f"Sure! Here is my invite link: {bot_link}")
     
     @app_commands.command(name="ping", description="does a speed test by pinging Google")
     async def ping(self, interaction: discord.Interaction):

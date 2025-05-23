@@ -98,7 +98,7 @@ class MusicPlayer(commands.Cog):
         FFMPEG_OPTIONS = {
             'executable': FFMPEG_PATH,
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn -c:a libopus -b:a 64k -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
+            'options': '-vn -c:a libopus -b:a 32k -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
         }
 
         source = await discord.FFmpegOpusAudio.from_probe(
