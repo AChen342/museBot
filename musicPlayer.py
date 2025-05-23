@@ -89,11 +89,14 @@ class MusicPlayer(commands.Cog):
 
         audio_url, _ = queue.pop()
 
+        '''
         FFMPEG_PATH = os.path.join(
             os.path.dirname(__file__),
             'ffmpeg',
             'ffmpeg.exe'
         )
+        '''
+        FFMPEG_PATH = 'ffmpeg'
 
         FFMPEG_OPTIONS = {
             'executable': FFMPEG_PATH,
