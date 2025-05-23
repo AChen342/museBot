@@ -92,7 +92,7 @@ class MusicPlayer(commands.Cog):
         FFMPEG_PATH = os.path.join(
             os.path.dirname(__file__),
             'bin',
-            'ffmpeg'
+            'ffmpeg.exe'
         )
 
         FFMPEG_OPTIONS = {
