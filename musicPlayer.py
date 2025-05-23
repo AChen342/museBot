@@ -45,9 +45,9 @@ class MusicPlayer(commands.Cog):
     async def on_ready(self):
         try:
             await self.bot.tree.sync()
-            print(f"successfully synced music commands")
+            print(f"Music Player commands ready.")
         except Exception as e:
-            print(f"Failed to sync music commands due to: {e}")
+            print(f"Failed to load music commands: {e}")
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
@@ -98,7 +98,7 @@ class MusicPlayer(commands.Cog):
         FFMPEG_OPTIONS = {
             'executable': FFMPEG_PATH,
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn -c:a libopus -b:a 128k -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
+            'options': '-vn -c:a libopus -b:a 64k -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
         }
 
         source = await discord.FFmpegOpusAudio.from_probe(
