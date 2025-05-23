@@ -147,12 +147,13 @@ class MusicPlayer(commands.Cog):
                 # if bot is in different vc than user
                 await voice_client.move_to(voice_channel)
 
+            COOKIES_PATH = os.path.join(os.path.dirname(__file__), 'cookies.txt')
             YDL_OPTIONS = {
                 'format': 'bestaudio/best',
                 'extract_flat': True,
                 'quiet': True,
                 'no_warnings': True,
-                'cookies': 'cookies.txt'
+                'cookies': COOKIES_PATH
             }
 
             # process youtube video into audio
