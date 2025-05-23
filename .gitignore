@@ -11,4 +11,7 @@ __pycache__/
 # VS Code settings
 .vscode/
 
+# text files
+.txt
+
 # End of https://www.toptal.com/developers/gitignore/api/dotenv

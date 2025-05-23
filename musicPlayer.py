@@ -151,7 +151,8 @@ class MusicPlayer(commands.Cog):
                 'format': 'bestaudio/best',
                 'extract_flat': True,
                 'quiet': True,
-                'no_warnings': True
+                'no_warnings': True,
+                'cookies': 'cookies.txt'
             }
 
             # process youtube video into audio
