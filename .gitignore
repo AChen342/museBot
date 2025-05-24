@@ -1,0 +1,17 @@
+# Created by https://www.toptal.com/developers/gitignore/api/dotenv
+# Edit at https://www.toptal.com/developers/gitignore?templates=dotenv
+
+### dotenv ###
+.env
+
+# Python cache
+__pycache__
+*.pyc
+
+# VS Code settings
+.vscode/
+
+# vbs
+*.vbs
+
+# End of https://www.toptal.com/developers/gitignore/api/dotenv
