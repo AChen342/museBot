@@ -219,7 +219,7 @@ class MusicPlayer(commands.Cog):
         msg = ""
         if not self.loop_audio:
             self.loop_audio = True
-            msg = "Current song will not loop"
+            msg = "Current song will now loop"
         
         else:
             self.loop_audio = False
