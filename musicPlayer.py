@@ -113,8 +113,7 @@ class MusicPlayer(commands.Cog):
         FFMPEG_OPTIONS = {
             'executable': FFMPEG_PATH,
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn -af loudnorm=I=-16:LRA=11:TP=-1.5 -c:a libopus -b:a 32k -ar 48000 -ac 2 -application lowdelay -bufsize 256k',
-            'creationflags': subprocess.CREATE_NO_WINDOW
+            'options': '-vn -af loudnorm=I=-16:LRA=11:TP=-1.5 -c:a libopus -b:a 32k -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
         }
 
         voice_client = interaction.guild.voice_client
