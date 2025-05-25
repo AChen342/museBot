@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.1.0] - 2025-05-25
+### Added
+- Loop song button to repeat current song
+- Loop queue button to repeat entire queue
+- New "/options" command to bring up music player user interface
+- Added FFMPEG flag to make volume for all audio sources consistent
+
+### Changed
+- When clicking on view queue button, bot should send an embedded message
+
 ## [v2.0.0] - 2025-05-23
 ### Added
 - Skip Button to skip songs in queue
@@ -12,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - View Queue Button to view next five songs in queue
 - Pause Button to pause current song playing
 - Resume Button to resume playing song
-- New /ping command to see bot internet connection
-- New /stats command to see bot system resource stats such as
+- New "/ping" command to see bot internet connection
+- New "/stats" command to see bot system resource stats such as
     cpu and memory usage
 
 ### Changed

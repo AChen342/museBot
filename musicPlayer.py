@@ -6,6 +6,7 @@ import yt_dlp as youtube_dl
 import os
 from collections import deque
 from discord.ui import Button, View
+import copy
 
 
 class MusicControls(discord.ui.View):
@@ -37,18 +38,20 @@ class MusicControls(discord.ui.View):
     async def loop_button(self, interaction, button):
         await self.musicPlayer.loopSong(interaction)
 
-    '''
     @discord.ui.button(label="Loop Queue", style=discord.ButtonStyle.red)
-    async def loop_queue_button(self, interaction, button):
+    async def is_queue_looping_button(self, interaction, button):
         await self.musicPlayer.loopQueue(interaction)
-    '''
+    
 
 class MusicPlayer(commands.Cog):
+    TEST_AUDIO = "https://www.youtube.com/watch?v=V4QuRe-JLDo"
+
     def __init__(self, bot):
         self.bot = bot
         self.queues = {}
         self.loop_audio = False
-        self.loop_queue = False
+        self.is_queue_looping = False
+        self.loop_queue = None
         self.current_audio = None
 
     @commands.Cog.listener()
@@ -91,7 +94,12 @@ class MusicPlayer(commands.Cog):
         if error:
             await interaction.response.send_message(f"Playback error: {error}")
 
-        queue = self.queues[interaction.guild.name]
+        server_name = interaction.guild.name
+        
+        if self.is_queue_looping and len(self.queues[server_name]) == 0:
+            self.queues[server_name] = copy.deepcopy(self.loop_queue)
+
+        queue = self.queues[server_name]
         if not queue and not self.loop_audio:
             return
 
@@ -104,14 +112,10 @@ class MusicPlayer(commands.Cog):
         FFMPEG_OPTIONS = {
             'executable': FFMPEG_PATH,
             'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn -c:a libopus -b:a 32k -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
+            'options': '-vn -af loudnorm=I=-16:LRA=11:TP=-1.5 -c:a libopus -b:a 32k -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
         }
 
         voice_client = interaction.guild.voice_client
-        if self.loop_queue and not self.loop_audio:
-            server_name = interaction.guild.name
-            server_queue = self.queues[server_name]
-            await self.to_queue(server_name, server_queue[0])
 
         if not self.loop_audio:
             audio_url, audio_title = queue.pop()
@@ -197,20 +201,37 @@ class MusicPlayer(commands.Cog):
             if voice_client and voice_client.is_connected():
                 await voice_client.disconnect()
     
+    @app_commands.command(name="options", description="brings up music player interface")
+    async def options(self, interaction: discord.Interaction):
+        voice_client = interaction.guild.voice_client
+        
+        if not voice_client or not voice_client.is_connected():
+            await interaction.response.send_message("Muse is not connected to a voice chat")
+            return
+        
+        view = MusicControls(self)
+        _, audio_title = self.current_audio
+        if voice_client.is_paused():
+            await interaction.response.send_message(f"Now Paused: {audio_title}", view=view)
+        else:
+            await interaction.response.send_message(f"Now Playing: {audio_title}", view=view)
+
     async def loopQueue(self, interaction: discord.Interaction):
         msg = ""
-        if not self.loop_queue:
-            self.loop_queue = True
+        if not self.is_queue_looping:
+            self.is_queue_looping = True
+            
+            server_name = interaction.guild.name
+            server_queue = self.queues[server_name]
+            self.loop_queue = copy.deepcopy(server_queue)
 
-            if not self.loop_audio:            
-                server_name = interaction.guild.name
-                server_queue = self.queues[server_name]
-                await self.to_queue(server_name, self.current_audio)
-
+            # add first entry
+            self.loop_queue.appendleft(self.current_audio)
             msg = "Current queue will now loop."
 
         else:
-            self.loop_queue = False
+            self.is_queue_looping = False
+            self.loop_queue.clear()
             msg = "Current queue will stop looping."
 
         await interaction.response.send_message(msg)
@@ -247,7 +268,12 @@ class MusicPlayer(commands.Cog):
     async def view_queue(self, interaction: discord.Interaction):
         server_name = interaction.guild.name
         queue = self.queues[server_name]
-        msg = "Next on your queue:\n"
+        msg = ""
+        embed = discord.Embed(
+            title="Next on your queue",
+            description="Displays next five songs in your queue.",
+            color=discord.Color.purple()
+        )
 
         if len(queue) == 0:
             msg = "Your queue is empty."
@@ -256,10 +282,13 @@ class MusicPlayer(commands.Cog):
                 _, title = queue[i]
                 msg += f"{i + 1}. {title}\n"
 
-        if interaction.response.is_done():
-            await interaction.followup.send(msg)
-        else:
-            await interaction.response.send_message(msg)
+        embed.add_field(
+            name="Upcoming:",
+            value=msg,
+            inline=False
+        )
+
+        await interaction.response.send_message(embed=embed)
 
     async def skip(self, interaction: discord.Interaction):
         voice_client = interaction.guild.voice_client
@@ -286,6 +315,7 @@ class MusicPlayer(commands.Cog):
 
     async def end(self, interaction: discord.Interaction):
         voice_client = interaction.guild.voice_client
+        server_name = interaction.guild.name
 
         if not voice_client or not voice_client.is_connected():
             return await interaction.response.send_message(
@@ -295,7 +325,8 @@ class MusicPlayer(commands.Cog):
 
         self.loop_audio = False
         self.current_audio = None
-        self.loop_queue = False
+        self.is_queue_looping = False
+        self.queues[server_name].clear()
 
         if voice_client.is_playing():
             voice_client.stop()
