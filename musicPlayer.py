@@ -51,7 +51,7 @@ class MusicPlayer(commands.Cog):
         self.queues = {}
         self.loop_audio = False
         self.is_queue_looping = False
-        self.loop_queue = None
+        self.loop_queues = {}
         self.current_audio = None
 
     @commands.Cog.listener()
@@ -97,7 +97,7 @@ class MusicPlayer(commands.Cog):
         server_name = interaction.guild.name
         
         if self.is_queue_looping and len(self.queues[server_name]) == 0:
-            self.queues[server_name] = copy.deepcopy(self.loop_queue)
+            self.queues[server_name] = copy.deepcopy(self.loop_queues[server_name])
 
         queue = self.queues[server_name]
         if not queue and not self.loop_audio:
@@ -218,20 +218,24 @@ class MusicPlayer(commands.Cog):
 
     async def loopQueue(self, interaction: discord.Interaction):
         msg = ""
+        server_name = interaction.guild.name
+
         if not self.is_queue_looping:
-            self.is_queue_looping = True
-            
-            server_name = interaction.guild.name
+            self.is_queue_looping = True    
             server_queue = self.queues[server_name]
-            self.loop_queue = copy.deepcopy(server_queue)
+
+            if self.loop_queues.get(server_name) is not None:
+                self.loop_queues[server_name] = copy.deepcopy(server_queue)
+            else:
+                self.loop_queues.update({server_name: copy.deepcopy(server_queue)})
 
             # add first entry
-            self.loop_queue.appendleft(self.current_audio)
+            self.loop_queues[server_name].appendleft(self.current_audio)
             msg = "Current queue will now loop."
 
         else:
             self.is_queue_looping = False
-            self.loop_queue.clear()
+            self.loop_queues[server_name].clear()
             msg = "Current queue will stop looping."
 
         await interaction.response.send_message(msg)
@@ -327,6 +331,7 @@ class MusicPlayer(commands.Cog):
         self.current_audio = None
         self.is_queue_looping = False
         self.queues[server_name].clear()
+        self.loop_queues[server_name].clear()
 
         if voice_client.is_playing():
             voice_client.stop()
