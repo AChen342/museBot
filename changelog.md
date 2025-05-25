@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [v2.1.0] - 2025-05-25
 ### Added
 - Loop song button to repeat current song
-- Loop queue button to repeat entire queue
+- Loop queue button to repeat entire queue, loop queues are now unique to each discord server
 - New "/options" command to bring up music player user interface
 - Added FFMPEG flag to make volume for all audio sources consistent
 
