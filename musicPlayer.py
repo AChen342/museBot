@@ -42,9 +42,6 @@ class MusicPlayer(commands.Cog):
         '''
         self.bot = bot
         self.queues = {}
-        self.loop_audio = False
-        self.is_queue_looping = False
-        self.loop_queues = {}
         self.current_audio = None
 
     @commands.Cog.listener()
@@ -107,20 +104,14 @@ class MusicPlayer(commands.Cog):
 
         server_name = interaction.guild.name
 
-        if not self.queues[server_name] and self.is_queue_looping:
-            self.queues[server_name] = copy.deepcopy(self.loop_queues[server_name])
-
         server_queue = self.queues[server_name]
-        if not server_queue and not self.loop_audio:
+        if not server_queue:
             return
 
         voice_client = interaction.guild.voice_client
 
-        if not self.loop_audio:
-            audio_url, audio_title = server_queue.pop()
-            self.current_audio = (audio_url, audio_title)
-        else:
-            audio_url, audio_title = self.current_audio
+        self.current_audio = server_queue.popleft()
+        audio_url, audio_title = self.current_audio
 
         source = await discord.FFmpegOpusAudio.from_probe(
             audio_url,
@@ -181,9 +172,7 @@ class MusicPlayer(commands.Cog):
             if self.queues.get(server_name) == None:
                 self.queues.update({server_name: deque()})
             
-            # if queue is not looping then add audio source to regular queue
-            # if queue is looping then add audio source to looping queue
-            queue = self.loop_queues[server_name] if self.is_queue_looping else self.queues[server_name]
+            queue = self.queues[server_name]
 
             # add audio to queue            
             await self.to_queue(queue, (audio_url, audio_title))
@@ -215,50 +204,7 @@ class MusicPlayer(commands.Cog):
         _, audio_title = self.current_audio
         msg = "Now Paused: " if bot_voice_client.is_paused() else "Now Playing: "
         await interaction.response.send_message(f"{msg}\"{audio_title}\"", view=view)
-        
-    async def loopQueue(self, interaction: discord.Interaction):
-        '''Handles the Loop Queue button interaction
-        When the user interacts with the "Loop Queue" button, the bot will loop
-        all the audio that are in the server queue.
-        '''
-        msg = ""
-        server_name = interaction.guild.name
 
-        if not self.is_queue_looping:
-            self.is_queue_looping = True    
-            server_queue = self.queues[server_name]
-
-            if self.loop_queues.get(server_name) is not None:
-                self.loop_queues[server_name] = copy.deepcopy(server_queue)
-            else:
-                self.loop_queues.update({server_name: copy.deepcopy(server_queue)})
-
-            # add first entry
-            self.loop_queues[server_name].appendleft(self.current_audio)
-            msg = "Current queue will now loop."
-
-        else:
-            self.is_queue_looping = False
-            self.loop_queues[server_name].clear()
-            msg = "Current queue will stop looping."
-
-        await interaction.response.send_message(msg)
-
-    async def loopSong(self, interaction: discord.Interaction):
-        '''Handles Loop Song button interaction.
-        When the user interacts with the "Loop Song" button, the bot will
-        repeat the current audio.
-        '''
-        msg = ""
-        if not self.loop_audio:
-            self.loop_audio = True
-            msg = "Current song will now loop"
-        
-        else:
-            self.loop_audio = False
-            msg = "This song will stop looping"
-        
-        await interaction.response.send_message(msg)
 
     async def resume(self, interaction: discord.Interaction):
         '''Handles the Resume button interaction.
@@ -288,7 +234,7 @@ class MusicPlayer(commands.Cog):
         Displays the next five audio in server queue.
         '''
         server_name = interaction.guild.name
-        queue = self.queues[server_name] if not self.is_queue_looping else self.loop_queues[server_name]
+        queue = self.queues[server_name] 
         msg = ""
         embed = discord.Embed(
             title="Next on your queue",
@@ -341,29 +287,35 @@ class MusicPlayer(commands.Cog):
         '''Handles the End button interaction.
         Stops the bot from playing and disconnects the bot from voice channel.
         '''
-        voice_client = interaction.guild.voice_client
-        server_name = interaction.guild.name
 
-        if not voice_client or not voice_client.is_connected():
-            return await interaction.response.send_message(
-                "I'm not connected to any voice channel",
-                ephemeral=True
+        try:
+            voice_client = interaction.guild.voice_client
+            server_name = interaction.guild.name
+
+            if not voice_client or not voice_client.is_connected():
+                return await interaction.response.send_message(
+                    "I'm not connected to any voice channel",
+                    ephemeral=True
+                )
+
+            self.current_audio = None
+
+            queues = self.queues.get(server_name)
+            if queues is not None:
+                queues.clear()
+            
+            if voice_client.is_playing():
+                voice_client.stop()
+
+            await voice_client.disconnect()
+
+            await interaction.response.send_message(
+                "Stopped playback and disconnected from voice channel"
             )
-
-        self.loop_audio = False
-        self.current_audio = None
-        self.is_queue_looping = False
-        self.queues[server_name].clear()
-        self.loop_queues[server_name].clear()
-
-        if voice_client.is_playing():
-            voice_client.stop()
-
-        await voice_client.disconnect()
-
-        await interaction.response.send_message(
-            "Stopped playback and disconnected from voice channel"
-        )
+        except Exception as e:
+            print(f"Error in end: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"Error: {e}")
 
 
 class MusicControls(discord.ui.View):
@@ -426,26 +378,6 @@ class MusicControls(discord.ui.View):
             button: The Button object that was clicked by user
         '''
         await self.musicPlayer.resume(interaction)
-
-    @discord.ui.button(label="Loop Song", style=discord.ButtonStyle.green)
-    async def loop_button(self, interaction, button):
-        '''Loop Song Button UI
-
-        Args:
-            interaction: Contains information about an interaction between user and bot.
-            button: The Button object that was clicked by user
-        '''
-        await self.musicPlayer.loopSong(interaction)
-
-    @discord.ui.button(label="Loop Queue", style=discord.ButtonStyle.red)
-    async def is_queue_looping_button(self, interaction, button):
-        '''Loop Queue Button UI
-
-        Args:
-            interaction: Contains information about an interaction between user and bot.
-            button: The Button object that was clicked by user
-        '''
-        await self.musicPlayer.loopQueue(interaction)
 
 
 async def setup(bot):
