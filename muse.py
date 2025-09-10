@@ -16,6 +16,11 @@ load_dotenv()
 TOKEN = os.getenv('TOKEN')
 APP_ID = os.getenv('APP_ID')
 
+# Don't start bot if environment variables are not found.
+if not TOKEN or not APP_ID:
+    print("Error: TOKEN and/or APP_ID not found.")
+    exit(1)
+
 intents = discord.Intents.default()
 # manages new slash commands
 intents.message_content = True

@@ -6,8 +6,7 @@ from discord import app_commands
 import yt_dlp as youtube_dl
 import os
 from collections import deque
-from discord.ui import Button, View
-import copy
+from discord.ui import Button
 
 class MusicPlayer(commands.Cog):
     '''Discord Cog for playing music through Muse bot
