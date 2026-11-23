@@ -266,29 +266,25 @@ class MusicPlayer(commands.Cog):
 
     async def skip(self, interaction: discord.Interaction):
         '''Handles the Skip button interaction.
-        Skips the current audio playing. Will not skip if there server queue is empty.
-        '''
+        Skips the current audio playing. Stops current audio if nothing in queue'''
         voice_client = interaction.guild.voice_client
         server_name = interaction.guild.name
         server_queue = self.queues[server_name]
 
-        if len(server_queue) == 0:
-            await interaction.response.send_message("Your queue is empty.")
-            return
-  
-        _, current_audio_title = server_queue[0]
-
-        if voice_client and voice_client.is_playing():
-            voice_client.stop()
-            await interaction.response.send_message(f"Skipped {current_audio_title}.")
-        
-        elif voice_client and voice_client.is_paused():
-            voice_client.resume()
-            voice_client.stop()
-            await interaction.response.send_message(f"Skipped {current_audio_title}.")
-        
-        else:
+        if not (voice_client and (voice_client.is_playing() or voice_client.is_paused())):
             await interaction.response.send_message("Nothing is playing.")
+            return
+        
+        _, current_audio_title = self.current_audio
+        voice_client.stop()
+        # if there is nothing is queue, instead of skipping to next song
+        # stop playing current song
+        if len(server_queue) <= 0:
+            await interaction.response.send_message(f"Stopped {current_audio_title}.")
+        else:
+            # if there is a queue, skip current song and play next song
+            await interaction.response.send_message(f"Skipped {current_audio_title}.")
+
 
     async def end(self, interaction: discord.Interaction):
         '''Handles the End button interaction.
