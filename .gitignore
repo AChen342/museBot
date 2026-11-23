@@ -18,3 +18,4 @@ __pycache__
 *.sh
 
 # End of https://www.toptal.com/developers/gitignore/api/dotenv
+.venv/
