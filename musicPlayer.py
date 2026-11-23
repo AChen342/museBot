@@ -85,6 +85,13 @@ class MusicPlayer(commands.Cog):
 
         non_bot_members = [m for m in channel.members if not m.bot]
         if len(non_bot_members) == 0:
+            # clears current audio
+            self.current_audio = None
+
+            # clears server audio queue
+            queue = self.queues.get(member.guild.name)
+            if queue:
+                queue.clear()
             await bot_voice_client.disconnect()
 
     async def to_queue(self, queue: Deque[Tuple[str, str]], audio_source: Tuple[str, str]):
