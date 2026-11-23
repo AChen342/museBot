@@ -30,7 +30,12 @@ class MusicPlayer(commands.Cog):
         'format': 'bestaudio/best',
         'extract_flat': True,
         'quiet': True,
-        'no_warnings': True
+        'no_warnings': True,
+        # Force IPv4: YouTube returns 403 Forbidden for stream links tied to our IPv6 address
+        'source_address': '0.0.0.0',
+        # Other YouTube clients (tv, web, android) often return links that fail with 403;
+        # visionos was the only one that worked for every video tested (Nov 2026)
+        'extractor_args': {'youtube': {'player_client': ['visionos']}}
     }
 
     def __init__(self, bot: commands.Bot):
@@ -99,7 +104,7 @@ class MusicPlayer(commands.Cog):
             error: Stores any errors that occurred during audio playback.
         '''
         if error:
-            await interaction.response.send_message(f"Playback error: {error}")
+            await interaction.channel.send(f"Playback error: {error}")
 
         server_name = interaction.guild.name
 
@@ -124,12 +129,15 @@ class MusicPlayer(commands.Cog):
             )
 
         view = MusicControls(self)
-        await interaction.followup.send(
-            f"Now Playing: \"{audio_title}\"",
-            view=view
-        )
-        
         voice_client.play(source, after=after_playing)
+
+        try:
+            await interaction.channel.send(
+                f"Now Playing: \"{audio_title}\"",
+                view=view
+            )        
+        except discord.HTTPException as e:
+            print(f"Couldn't send Now Playing message: {e}")
 
     @app_commands.command(name="play", description="plays a youtube link")
     async def play(self, interaction: discord.Interaction, url: str):
