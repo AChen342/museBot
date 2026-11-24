@@ -300,15 +300,30 @@ class MusicPlayer(commands.Cog):
         self.current_audio[guild_id] = server_queue.popleft()
         song = self.current_audio[guild_id]
 
-        source = await discord.FFmpegOpusAudio.from_probe(song.stream_url, **self.FFMPEG_OPTIONS)
 
         def after_playing(error):
-            asyncio.run_coroutine_threadsafe(
+            # threads can throw away future errors, so instead
+            # we save these possible errors and then check them out
+            future = asyncio.run_coroutine_threadsafe(
                 self.play_next(interaction, error),
                 self.bot.loop
             )
 
-        voice_client.play(source, after=after_playing)
+            future.add_done_callback(
+                lambda f: f.exception() and print(f"play_next failed: {f.exception()!r}")
+            )
+        
+        # detect if song froze
+        try:
+            source = await discord.FFmpegOpusAudio.from_probe(song.stream_url, **self.FFMPEG_OPTIONS)
+            voice_client.play(source, after=after_playing)
+        
+        except Exception as e:
+            # if error when playing the song, skip it and play the next one
+            print(f"Unable to play song: {e}")
+            await interaction.channel.send(f"Couldn't play {song.title}, skipping.")
+            await self.play_next(interaction)
+            return
 
         # Sent to the channel (not as an interaction reply) so it still works
         # after the interaction expires (15 minutes)
