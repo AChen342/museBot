@@ -8,9 +8,7 @@ pause, resume).
 import asyncio
 import os
 from collections import deque
-from typing import Deque, Optional, Tuple
-from urllib.parse import urlsplit
-import re
+from typing import Deque, Optional
 
 import discord
 import yt_dlp as youtube_dl
@@ -29,10 +27,6 @@ class Song:
     duration: Optional[str]
     uploader: Optional[str]
     requester: str = ""
-
-# constant
-YT_PATTERN = r'^(?:(?:www|m|music)\.)?(?:youtube\.com|youtu\.be)/'
-
 
 
 class MusicPlayer(commands.Cog):
@@ -292,53 +286,16 @@ class MusicPlayer(commands.Cog):
         # after the interaction expires (15 minutes)
         await self._update_player(guild_id, interaction.channel)
 
-    # used in play command. checks if user input is an url or a song query
-    def identify_song_input(self, source):
-        source = source.strip()
-        parse_source = urlsplit(source)
-
-        # if http:// is not in scheme, then could be a link missing it or a song query
-        if not parse_source.scheme:
-            if re.match(YT_PATTERN, source):
-                # found youtube or youtu.be, just needs the https:// part
-                return "https://" + source
-            else:
-                # not a youtube link, probably a song query
-                return "ytsearch1:" + source
-        else:
-            # if valid youtube link with https:// then go ahead and play the audio
-            return source
-
-    # used in play command. checks if user input is an url or a song query
-    def identify_song_input(self, source):
-        source = source.strip()
-        parse_source = urlsplit(source)
-
-        # if http:// is not in scheme, then could be a link missing it or a song query
-        if not parse_source.scheme:
-            if re.match(YT_PATTERN, source):
-                # found youtube or youtu.be, just needs the https:// part
-                return "https://" + source
-            else:
-                # not a youtube link, probably a song query
-                return "ytsearch1:" + source
-        else:
-            # if valid youtube link with https:// then go ahead and play the audio
-            return source
-
     # ------------------------------------------------------------------
     # Slash commands
     # ------------------------------------------------------------------
+
     @app_commands.command(name="play", description="plays a youtube link")
-    async def play(self, interaction: discord.Interaction, song: str):
-        '''
-        Users can either enter a youtube link or query a song.
-        If youtube link, then checks if youtube link is valid and then
-        downloads the song. If song, searches youtube for song and selects the
-        best match to play.
+    async def play(self, interaction: discord.Interaction, url: str):
+        '''Processes youtube link into audio and plays it through the bot.
 
         Args:
-            song: can be either a youtube url or a song name
+            url: Youtube url provided by user input to be processed into audio
         '''
         if not interaction.user.voice:
             await interaction.response.send_message(
@@ -351,13 +308,6 @@ class MusicPlayer(commands.Cog):
         user_voice_channel = interaction.user.voice.channel
         bot_voice_client = interaction.guild.voice_client
 
-        # identifies if song input is a link or title query
-        try:
-            song = self.identify_song_input(song)
-        except ValueError as ve:
-            print(f"Unable to recognize query: {ve}")     
-
-        # add music to queue
         try:
             await interaction.response.defer()
 
