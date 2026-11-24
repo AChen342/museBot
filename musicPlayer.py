@@ -7,8 +7,10 @@ pause, resume).
 '''
 import asyncio
 import os
+import re
 from collections import deque
 from typing import Deque, Optional
+from urllib.parse import urlsplit
 
 import discord
 import yt_dlp as youtube_dl
@@ -27,6 +29,10 @@ class Song:
     duration: Optional[str]
     uploader: Optional[str]
     requester: str = ""
+
+
+# Matches YouTube links typed without "https://", e.g. "youtube.com/watch?v=..." or "youtu.be/..."
+YT_PATTERN = r'^(?:(?:www|m|music)\.)?(?:youtube\.com|youtu\.be)/'
 
 
 class MusicPlayer(commands.Cog):
@@ -190,6 +196,28 @@ class MusicPlayer(commands.Cog):
 
         return song_card
 
+    def identify_song_input(self, source: str) -> str:
+        '''Turns what the user typed in /play into something yt_dlp understands.
+
+        Returns the link unchanged, adds "https://" to a YouTube link typed
+        without it, or turns anything else into a YouTube search.
+        '''
+        source = source.strip()
+        parse_source = urlsplit(source)
+
+        # a full link (http:// or https://), play it as-is
+        if parse_source.scheme in ('http', 'https'):
+            return source
+
+        # found youtube or youtu.be, just needs the https:// part
+        if re.match(YT_PATTERN, source):
+            return "https://" + source
+
+        # not a link, so it's a song query: use the first YouTube search result.
+        # (Checking for http/https above, instead of any scheme, keeps queries with
+        # a colon like "Re:Zero opening" from being mistaken for a link.)
+        return "ytsearch1:" + source
+
     def _get_queue(self, server_id: int) -> Deque[Song]:
         '''Returns the server's queue, creating an empty one if needed.'''
         return self.queues.setdefault(server_id, deque())
@@ -207,7 +235,7 @@ class MusicPlayer(commands.Cog):
         if 'entries' in info:  # Playlist case
             entries = list(info['entries'])
             if len(entries) <= 0:
-                raise ValueError("That link has no audio to play. Use a link to a specific video.")
+                raise ValueError("Couldn't find anything to play. Try a different link or song name.")
             info = entries[0]
 
         total = info.get('duration')
@@ -290,12 +318,13 @@ class MusicPlayer(commands.Cog):
     # Slash commands
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="play", description="plays a youtube link")
-    async def play(self, interaction: discord.Interaction, url: str):
-        '''Processes youtube link into audio and plays it through the bot.
+    @app_commands.command(name="play", description="play a YouTube link or search for a song")
+    @app_commands.describe(query="A YouTube link or a song name")
+    async def play(self, interaction: discord.Interaction, query: str):
+        '''Plays a YouTube link, or searches YouTube and plays the best match.
 
         Args:
-            url: Youtube url provided by user input to be processed into audio
+            query: A YouTube link (with or without https://) or a song name
         '''
         if not interaction.user.voice:
             await interaction.response.send_message(
@@ -317,7 +346,9 @@ class MusicPlayer(commands.Cog):
             if bot_voice_client.channel != user_voice_channel:
                 await bot_voice_client.move_to(user_voice_channel)
 
-            song = await asyncio.to_thread(self._extract_audio, url)
+            # a link plays directly; anything else becomes a YouTube search
+            source = self.identify_song_input(query)
+            song = await asyncio.to_thread(self._extract_audio, source)
             song.requester = interaction.user.mention
 
             # add audio to queue
