@@ -114,6 +114,39 @@ class MusicPlayer(commands.Cog):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _now_playing_embed(self, song, guild_id, paused=False):
+        song_card = discord.Embed(
+            title=song.title, 
+            url=song.webpage_url,
+            description=song.uploader,
+            color=discord.Color.blue()
+        )
+
+        # set up author for embed card
+        author = "🎶 Now Playing" if not paused else "⏸️ Paused"
+        song_card.set_author(name=author)
+
+        # setup duration
+        song_card.add_field(name="Duration", value=song.duration or "Live", inline=True)
+
+        # footer setup
+        server_queue = self._get_queue(guild_id)
+        queue_count = len(server_queue)
+
+        if server_queue:
+            footer = f"Up next: {server_queue[0].title}"
+            footer += f" + {queue_count - 1} more" if (queue_count - 1) > 0 else ""
+        else:
+            footer = "Queue is empty"
+        song_card.set_footer(text=footer)
+
+        # thumbnail setup
+        song_card.set_thumbnail(url=song.thumbnail)
+
+        # requester setup
+        song_card.add_field(name="Requested by", value=song.requester, inline=True)
+
+        return song_card
 
     def _get_queue(self, server_id: int) -> Deque[Song]:
         '''Returns the server's queue, creating an empty one if needed.'''
@@ -208,9 +241,10 @@ class MusicPlayer(commands.Cog):
         # after the interaction expires (15 minutes)
         try:
             await interaction.channel.send(
-                f"Now Playing: \"{song.title}\"",
+                embed=self._now_playing_embed(song, guild_id),
                 view=MusicControls(self)
             )
+
         except discord.HTTPException as e:
             print(f"Couldn't send Now Playing message: {e}")
 
@@ -280,8 +314,11 @@ class MusicPlayer(commands.Cog):
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
 
-        msg = "Now Paused: " if bot_voice_client.is_paused() else "Now Playing: "
-        await interaction.response.send_message(f"{msg}\"{current.title}\"", view=MusicControls(self, paused=bot_voice_client.is_paused()))
+        paused = bot_voice_client.is_paused()
+        await interaction.response.send_message(
+            embed=self._now_playing_embed(current, interaction.guild.id, paused=paused),
+            view=MusicControls(self, paused=paused)
+        )
 
     # ------------------------------------------------------------------
     # Button handlers (called by MusicControls)
