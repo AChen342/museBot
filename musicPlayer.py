@@ -215,7 +215,7 @@ class MusicPlayer(commands.Cog):
             if bot_voice_client.channel != user_voice_channel:
                 await bot_voice_client.move_to(user_voice_channel)
 
-            audio_url, audio_title = self._extract_audio(url)
+            audio_url, audio_title = await asyncio.to_thread(self._extract_audio, url)
 
             # add audio to queue
             self._get_queue(server_id).append((audio_url, audio_title))
