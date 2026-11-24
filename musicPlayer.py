@@ -8,16 +8,25 @@ pause, resume).
 import asyncio
 import os
 from collections import deque
-from typing import Deque, Optional, Tuple
+from typing import Deque, Optional
 
 import discord
 import yt_dlp as youtube_dl
 from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button
+from dataclasses import dataclass
 
-# A queued song: (audio stream url, title)
-Song = Tuple[str, str]
+
+@dataclass
+class Song:
+    stream_url: str
+    title: str
+    webpage_url: str
+    thumbnail: Optional[str]
+    duration: Optional[str]
+    uploader: Optional[str]
+    requester: str = ""
 
 
 class MusicPlayer(commands.Cog):
@@ -111,7 +120,7 @@ class MusicPlayer(commands.Cog):
         return self.queues.setdefault(server_id, deque())
 
     def _extract_audio(self, url: str) -> Song:
-        '''Uses yt_dlp to turn a YouTube link into (audio stream url, title).
+        '''Uses yt_dlp to turn a YouTube link into Song dataclass.
 
         Raises:
             youtube_dl.utils.DownloadError: If the video can't be loaded.
@@ -126,7 +135,24 @@ class MusicPlayer(commands.Cog):
                 raise ValueError("That link has no audio to play. Use a link to a specific video.")
             info = entries[0]
 
-        return info['url'], info.get('title', 'Unknown Title')
+        total = info.get('duration')
+        if total is None:
+            duration = None
+        else:
+            minutes, seconds = divmod(total, 60)
+            hours = 0
+            if minutes >= 60:
+                hours, minutes = divmod(minutes, 60)
+                duration = f"{hours}:{minutes:02d}:{seconds:02d}"
+            else:
+                duration = f"{minutes}:{seconds:02d}"
+
+        return Song(stream_url=info['url'],
+                    title=info.get('title', 'Unknown Title'),
+                    thumbnail=info.get('thumbnail'),
+                    duration=duration,
+                    uploader=info.get('uploader'),
+                    webpage_url=info.get('webpage_url', url))
 
     async def _reset_and_disconnect(self, server_id: int, voice_client: discord.VoiceClient):
         '''Clears the current audio and the server's queue, then disconnects.
@@ -166,9 +192,9 @@ class MusicPlayer(commands.Cog):
         voice_client = interaction.guild.voice_client
 
         self.current_audio[guild_id] = server_queue.popleft()
-        audio_url, audio_title = self.current_audio[guild_id]
+        song = self.current_audio[guild_id]
 
-        source = await discord.FFmpegOpusAudio.from_probe(audio_url, **self.FFMPEG_OPTIONS)
+        source = await discord.FFmpegOpusAudio.from_probe(song.stream_url, **self.FFMPEG_OPTIONS)
 
         def after_playing(error):
             asyncio.run_coroutine_threadsafe(
@@ -182,7 +208,7 @@ class MusicPlayer(commands.Cog):
         # after the interaction expires (15 minutes)
         try:
             await interaction.channel.send(
-                f"Now Playing: \"{audio_title}\"",
+                f"Now Playing: \"{song.title}\"",
                 view=MusicControls(self)
             )
         except discord.HTTPException as e:
@@ -219,12 +245,12 @@ class MusicPlayer(commands.Cog):
             if bot_voice_client.channel != user_voice_channel:
                 await bot_voice_client.move_to(user_voice_channel)
 
-            audio_url, audio_title = await asyncio.to_thread(self._extract_audio, url)
-            user = interaction.user.display_name
+            song = await asyncio.to_thread(self._extract_audio, url)
+            song.requester = interaction.user.mention
 
             # add audio to queue
-            self._get_queue(server_id).append((audio_url, audio_title))
-            await interaction.followup.send(f"{user} added \"{audio_title}\" to queue.")
+            self._get_queue(server_id).append(song)
+            await interaction.followup.send(f"{interaction.user.display_name} added \"{song.title}\" to queue.")
 
             # plays next song in queue
             if not bot_voice_client.is_playing() and not bot_voice_client.is_paused():
@@ -254,9 +280,8 @@ class MusicPlayer(commands.Cog):
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
 
-        _, audio_title = current
         msg = "Now Paused: " if bot_voice_client.is_paused() else "Now Playing: "
-        await interaction.response.send_message(f"{msg}\"{audio_title}\"", view=MusicControls(self, paused=bot_voice_client.is_paused()))
+        await interaction.response.send_message(f"{msg}\"{current.title}\"", view=MusicControls(self, paused=bot_voice_client.is_paused()))
 
     # ------------------------------------------------------------------
     # Button handlers (called by MusicControls)
@@ -273,15 +298,15 @@ class MusicPlayer(commands.Cog):
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
 
-        _, current_audio_title = self.current_audio.get(interaction.guild.id)
+        song = self.current_audio.get(interaction.guild.id)
         # stopping triggers after_playing -> play_next, which starts the next song if there is one
         voice_client.stop()
 
         user = interaction.user.display_name
         if len(server_queue) <= 0:
-            await interaction.response.send_message(f"{user} stopped {current_audio_title}.")
+            await interaction.response.send_message(f"{user} stopped {song.title}.")
         else:
-            await interaction.response.send_message(f"{user} skipped {current_audio_title}.")
+            await interaction.response.send_message(f"{user} skipped {song.title}.")
 
     async def end(self, interaction: discord.Interaction):
         '''Handles the End button interaction.
@@ -322,8 +347,8 @@ class MusicPlayer(commands.Cog):
         else:
             msg = ""
             for i in range(min(5, len(queue))):
-                _, title = queue[i]
-                msg += f"{i + 1}. {title}\n"
+                song = queue[i]
+                msg += f"{i + 1}. {song.title} ({song.duration})\n"
 
         embed.add_field(name="Upcoming:", value=msg, inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
