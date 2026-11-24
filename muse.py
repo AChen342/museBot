@@ -22,8 +22,6 @@ if not TOKEN or not APP_ID:
     exit(1)
 
 intents = discord.Intents.default()
-# manages new slash commands
-intents.message_content = True
 # don't use both client and bot, use one otherwise the bot won't work
 bot = commands.Bot(command_prefix="!", intents=intents, application_id=APP_ID)
 tree = bot.tree
