@@ -323,10 +323,12 @@ class MusicPlayer(commands.Cog):
             # add audio to queue
             self._get_queue(server_id).append(song)
             await interaction.followup.send(f"{interaction.user.display_name} added \"{song.title}\" to queue.")
-
+            
             # plays next song in queue
             if not bot_voice_client.is_playing() and not bot_voice_client.is_paused():
                 await self.play_next(interaction)
+            else:
+                await self._update_player(server_id, interaction.channel, paused=bot_voice_client.is_paused())
 
         except youtube_dl.utils.DownloadError:  # video is private, deleted, restricted, etc.
             await interaction.followup.send(
