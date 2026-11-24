@@ -365,23 +365,23 @@ class MusicControls(discord.ui.View):
         super().__init__(timeout=None)
         self.musicPlayer = musicPlayer
 
-    @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.skip(interaction)
 
-    @discord.ui.button(label="End", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="End", style=discord.ButtonStyle.red, emoji="⏹️")
     async def end_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.end(interaction)
 
-    @discord.ui.button(label="View Queue", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="View Queue", style=discord.ButtonStyle.green, emoji="📜")
     async def view_queue_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.view_queue(interaction)
 
-    @discord.ui.button(label="Pause", style=discord.ButtonStyle.gray)
+    @discord.ui.button(label="Pause", style=discord.ButtonStyle.gray, emoji="⏸️")
     async def pause_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.pause(interaction)
 
-    @discord.ui.button(label="Resume", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Resume", style=discord.ButtonStyle.blurple, emoji="▶️")
     async def resume_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.resume(interaction)
 
