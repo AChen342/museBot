@@ -63,8 +63,8 @@ class MusicPlayer(commands.Cog):
             bot: The Discord bot instance
         '''
         self.bot = bot
-        self.queues: dict[str, Deque[Song]] = {}
-        self.current_audio: Optional[Song] = None
+        self.queues: dict[int, Deque[Song]] = {}
+        self.current_audio: dict[int, Song] = {}
 
     # ------------------------------------------------------------------
     # Events
@@ -96,15 +96,15 @@ class MusicPlayer(commands.Cog):
 
         non_bot_members = [m for m in bot_voice_client.channel.members if not m.bot]
         if len(non_bot_members) == 0:
-            await self._reset_and_disconnect(member.guild.name, bot_voice_client)
+            await self._reset_and_disconnect(member.guild.id, bot_voice_client)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _get_queue(self, server_name: str) -> Deque[Song]:
+    def _get_queue(self, server_id: int) -> Deque[Song]:
         '''Returns the server's queue, creating an empty one if needed.'''
-        return self.queues.setdefault(server_name, deque())
+        return self.queues.setdefault(server_id, deque())
 
     def _extract_audio(self, url: str) -> Song:
         '''Uses yt_dlp to turn a YouTube link into (audio stream url, title).
@@ -124,24 +124,24 @@ class MusicPlayer(commands.Cog):
 
         return info['url'], info.get('title', 'Unknown Title')
 
-    async def _reset_and_disconnect(self, server_name: str, voice_client: discord.VoiceClient):
+    async def _reset_and_disconnect(self, server_id: int, voice_client: discord.VoiceClient):
         '''Clears the current audio and the server's queue, then disconnects.
 
         The queue is cleared before disconnecting so play_next (triggered when
         playback stops) finds nothing left to play.
         '''
-        self.current_audio = None
+        self.current_audio.pop(server_id, None)
 
-        queue = self.queues.get(server_name)
+        queue = self.queues.get(server_id)
         if queue:
             queue.clear()
 
         await voice_client.disconnect()
 
-    async def _leave_if_idle(self, server_name: str, voice_client: Optional[discord.VoiceClient]):
+    async def _leave_if_idle(self, server_id: int, voice_client: Optional[discord.VoiceClient]):
         '''Disconnects only if the bot is connected and not playing or paused.'''
         if voice_client and not (voice_client.is_playing() or voice_client.is_paused()):
-            await self._reset_and_disconnect(server_name, voice_client)
+            await self._reset_and_disconnect(server_id, voice_client)
 
     async def play_next(self, interaction: discord.Interaction, error=None):
         '''Plays the next audio url from a queue.
@@ -152,15 +152,17 @@ class MusicPlayer(commands.Cog):
         '''
         if error:
             await interaction.channel.send(f"Playback error: {error}")
-
-        server_queue = self.queues.get(interaction.guild.name)
+        
+        guild_id = interaction.guild.id
+        server_queue = self.queues.get(interaction.guild.id)
         if not server_queue:
+            self.current_audio.pop(guild_id, None)
             return
 
         voice_client = interaction.guild.voice_client
 
-        self.current_audio = server_queue.popleft()
-        audio_url, audio_title = self.current_audio
+        self.current_audio[guild_id] = server_queue.popleft()
+        audio_url, audio_title = self.current_audio[guild_id]
 
         source = await discord.FFmpegOpusAudio.from_probe(audio_url, **self.FFMPEG_OPTIONS)
 
@@ -200,7 +202,7 @@ class MusicPlayer(commands.Cog):
             )
             return
 
-        server_name = interaction.guild.name
+        server_id = interaction.guild.id
         user_voice_channel = interaction.user.voice.channel
         bot_voice_client = interaction.guild.voice_client
 
@@ -216,7 +218,7 @@ class MusicPlayer(commands.Cog):
             audio_url, audio_title = self._extract_audio(url)
 
             # add audio to queue
-            self._get_queue(server_name).append((audio_url, audio_title))
+            self._get_queue(server_id).append((audio_url, audio_title))
             await interaction.followup.send(f"Added \"{audio_title}\" to queue.")
 
             # plays next song in queue
@@ -227,11 +229,11 @@ class MusicPlayer(commands.Cog):
             await interaction.followup.send(
                 "Couldn't load that link. It may be privated, deleted, restricted or not a valid video."
             )
-            await self._leave_if_idle(server_name, bot_voice_client)
+            await self._leave_if_idle(server_id, bot_voice_client)
 
         except Exception as e:  # catches any other error
             await interaction.followup.send(f"Error: {str(e)}")
-            await self._leave_if_idle(server_name, bot_voice_client)
+            await self._leave_if_idle(server_id, bot_voice_client)
 
     @app_commands.command(name="options", description="brings up music player interface")
     async def options(self, interaction: discord.Interaction):
@@ -242,7 +244,12 @@ class MusicPlayer(commands.Cog):
             await interaction.response.send_message("Muse is not connected to a voice chat")
             return
 
-        _, audio_title = self.current_audio
+        current = self.current_audio.get(interaction.guild.id)
+        if current is None or not (bot_voice_client.is_playing() or bot_voice_client.is_paused()):
+            await interaction.response.send_message("Nothing is playing")
+            return
+
+        _, audio_title = current
         msg = "Now Paused: " if bot_voice_client.is_paused() else "Now Playing: "
         await interaction.response.send_message(f"{msg}\"{audio_title}\"", view=MusicControls(self))
 
@@ -255,13 +262,13 @@ class MusicPlayer(commands.Cog):
         Skips the current audio playing. Stops current audio if nothing in queue.
         '''
         voice_client = interaction.guild.voice_client
-        server_queue = self._get_queue(interaction.guild.name)
+        server_queue = self._get_queue(interaction.guild.id)
 
         if not (voice_client and (voice_client.is_playing() or voice_client.is_paused())):
             await interaction.response.send_message("Nothing is playing.")
             return
 
-        _, current_audio_title = self.current_audio
+        _, current_audio_title = self.current_audio.get(interaction.guild.id)
         # stopping triggers after_playing -> play_next, which starts the next song if there is one
         voice_client.stop()
 
@@ -283,7 +290,7 @@ class MusicPlayer(commands.Cog):
                     ephemeral=True
                 )
 
-            await self._reset_and_disconnect(interaction.guild.name, voice_client)
+            await self._reset_and_disconnect(interaction.guild.id, voice_client)
 
             await interaction.response.send_message(
                 "Stopped playback and disconnected from voice channel"
@@ -297,7 +304,7 @@ class MusicPlayer(commands.Cog):
         '''Handles View Queue button interaction.
         Displays the next five audio in server queue.
         '''
-        queue = self._get_queue(interaction.guild.name)
+        queue = self._get_queue(interaction.guild.id)
         embed = discord.Embed(
             title="Next on your queue",
             description="Displays next five songs in your queue.",
