@@ -355,10 +355,15 @@ class MusicPlayer(commands.Cog):
             return
 
         paused = bot_voice_client.is_paused()
-        await interaction.response.send_message(
-            embed=self._now_playing_embed(current, interaction.guild.id, paused=paused),
-            view=MusicControls(self, paused=paused)
-        )
+        old_message = self.player_messages.pop(interaction.guild_id, None)
+        if old_message:
+            try:
+                await old_message.delete()
+            except discord.HTTPException:
+                pass
+
+        await self._update_player(interaction.guild.id, interaction.channel, paused=paused)
+        await interaction.response.send_message("Player moved to the bottom", ephemeral=True)
 
     # ------------------------------------------------------------------
     # Button handlers (called by MusicControls)
