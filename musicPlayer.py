@@ -37,7 +37,7 @@ class MusicPlayer(commands.Cog):
     FFMPEG_OPTIONS = {
         'executable': FFMPEG_PATH,
         'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-        'options': '-vn -af loudnorm=I=-16:LRA=11:TP=-1.5 -c:a libopus -b:a 32k -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
+        'options': '-vn -af loudnorm=I=-16:LRA=11:TP=-1.5 -c:a libopus -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
     }
 
     # Options for yt_dlp extraction
