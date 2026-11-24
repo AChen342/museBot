@@ -78,6 +78,7 @@ class MusicPlayer(commands.Cog):
         self.bot = bot
         self.queues: dict[int, Deque[Song]] = {}
         self.current_audio: dict[int, Song] = {}
+        self.player_messages: dict [int, discord.Message] = {}
 
     # ------------------------------------------------------------------
     # Events
@@ -114,6 +115,47 @@ class MusicPlayer(commands.Cog):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    async def _close_player(self, guild_id, text):
+        message = self.player_messages.get(guild_id)
+        if message:
+            closed_card = discord.Embed(
+                title=text, 
+                color=discord.Color.dark_gray()
+            )
+
+            view = MusicControls(self)
+            for item in view.children:
+                item.disabled = True
+
+            try:
+                await message.edit(embed=closed_card, view=view)
+            except discord.HTTPException as e:
+                print(f"Couldn't close player: {e}")
+
+            self.player_messages.pop(guild_id)
+    
+    async def _update_player(self, guild_id, channel, paused=False):
+        current_song = self.current_audio.get(guild_id)
+        song_card = self._now_playing_embed(current_song, guild_id, paused=paused)
+        view_panel = MusicControls(self, paused=paused)
+
+        try:
+            message = self.player_messages.get(guild_id)
+            if message:
+                await message.edit(embed=song_card, view=view_panel)
+            else:
+                self.player_messages[guild_id] = await channel.send(embed=song_card, view=view_panel)
+        
+        except discord.NotFound:
+            try:
+                self.player_messages[guild_id] = await channel.send(embed=song_card, view=view_panel)
+
+            except discord.HTTPException as e:
+                print(f"Couldn't update player: {e}")
+
+        except discord.HTTPException as e:
+            print(f"Couldn't update player: {e}")
+
     def _now_playing_embed(self, song, guild_id, paused=False):
         song_card = discord.Embed(
             title=song.title, 
@@ -199,6 +241,8 @@ class MusicPlayer(commands.Cog):
         if queue:
             queue.clear()
 
+        await self._close_player(guild_id=server_id, text="Session Ended")
+
         await voice_client.disconnect()
 
     async def _leave_if_idle(self, server_id: int, voice_client: Optional[discord.VoiceClient]):
@@ -219,6 +263,7 @@ class MusicPlayer(commands.Cog):
         guild_id = interaction.guild.id
         server_queue = self.queues.get(interaction.guild.id)
         if not server_queue:
+            await self._close_player(guild_id, "Queue finished, use /play to add more")
             self.current_audio.pop(guild_id, None)
             return
 
@@ -239,14 +284,7 @@ class MusicPlayer(commands.Cog):
 
         # Sent to the channel (not as an interaction reply) so it still works
         # after the interaction expires (15 minutes)
-        try:
-            await interaction.channel.send(
-                embed=self._now_playing_embed(song, guild_id),
-                view=MusicControls(self)
-            )
-
-        except discord.HTTPException as e:
-            print(f"Couldn't send Now Playing message: {e}")
+        await self._update_player(guild_id, interaction.channel)
 
     # ------------------------------------------------------------------
     # Slash commands
