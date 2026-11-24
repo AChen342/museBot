@@ -470,6 +470,7 @@ class MusicControls(discord.ui.View):
     @discord.ui.button(label="Pause", style=discord.ButtonStyle.gray, emoji="⏸️")
     async def pause_resume_button(self, interaction: discord.Interaction, button: Button):
         voice_client = interaction.guild.voice_client
+        song = self.musicPlayer.current_audio.get(interaction.guild.id)
 
         if voice_client and voice_client.is_paused(): # resume if audio was paused
             voice_client.resume()
@@ -477,7 +478,9 @@ class MusicControls(discord.ui.View):
             self.pause_resume_button.emoji = "⏸️"
             self.pause_resume_button.style = discord.ButtonStyle.gray
 
-            await interaction.response.edit_message(view=self)
+            await interaction.response.edit_message(
+                embed=self.musicPlayer._now_playing_embed(song, interaction.guild.id, paused=False), view=self
+            )
 
         elif voice_client and voice_client.is_playing(): # pause if audio is playing
             voice_client.pause()
@@ -485,7 +488,9 @@ class MusicControls(discord.ui.View):
             self.pause_resume_button.emoji = "▶️"
             self.pause_resume_button.style = discord.ButtonStyle.green
 
-            await interaction.response.edit_message(view=self)
+            await interaction.response.edit_message(
+                embed=self.musicPlayer._now_playing_embed(song, interaction.guild.id, paused=True), view=self
+            )
 
         else:
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
