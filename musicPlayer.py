@@ -31,7 +31,11 @@ class MusicPlayer(commands.Cog):
     # Configuration
     # ------------------------------------------------------------------
 
-    FFMPEG_PATH = os.path.join(os.path.dirname(__file__), 'bin', 'ffmpeg.exe')
+    # Bundled ffmpeg.exe on Windows; the system-installed ffmpeg everywhere else (e.g. Linux server)
+    FFMPEG_PATH = (
+        os.path.join(os.path.dirname(__file__), 'bin', 'ffmpeg.exe')
+        if os.name == 'nt' else 'ffmpeg'
+    )
 
     # Options for ffmpeg audio processing
     FFMPEG_OPTIONS = {
