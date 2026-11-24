@@ -17,9 +17,18 @@ import yt_dlp as youtube_dl
 from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button
+from dataclasses import dataclass
 
-# A queued song: (audio stream url, title)
-Song = Tuple[str, str]
+
+@dataclass
+class Song:
+    stream_url: str
+    title: str
+    webpage_url: str
+    thumbnail: Optional[str]
+    duration: Optional[str]
+    uploader: Optional[str]
+    requester: str = ""
 
 # constant
 YT_PATTERN = r'^(?:(?:www|m|music)\.)?(?:youtube\.com|youtu\.be)/'
@@ -75,6 +84,7 @@ class MusicPlayer(commands.Cog):
         self.bot = bot
         self.queues: dict[int, Deque[Song]] = {}
         self.current_audio: dict[int, Song] = {}
+        self.player_messages: dict [int, discord.Message] = {}
 
     # ------------------------------------------------------------------
     # Events
@@ -111,13 +121,87 @@ class MusicPlayer(commands.Cog):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    async def _close_player(self, guild_id, text):
+        message = self.player_messages.get(guild_id)
+        if message:
+            closed_card = discord.Embed(
+                title=text, 
+                color=discord.Color.dark_gray()
+            )
+
+            view = MusicControls(self)
+            for item in view.children:
+                item.disabled = True
+
+            try:
+                await message.edit(embed=closed_card, view=view)
+            except discord.HTTPException as e:
+                print(f"Couldn't close player: {e}")
+
+            self.player_messages.pop(guild_id)
+    
+    async def _update_player(self, guild_id, channel, paused=False):
+        current_song = self.current_audio.get(guild_id)
+        song_card = self._now_playing_embed(current_song, guild_id, paused=paused)
+        view_panel = MusicControls(self, paused=paused)
+
+        try:
+            message = self.player_messages.get(guild_id)
+            if message:
+                await message.edit(embed=song_card, view=view_panel)
+            else:
+                self.player_messages[guild_id] = await channel.send(embed=song_card, view=view_panel)
+        
+        except discord.NotFound:
+            try:
+                self.player_messages[guild_id] = await channel.send(embed=song_card, view=view_panel)
+
+            except discord.HTTPException as e:
+                print(f"Couldn't update player: {e}")
+
+        except discord.HTTPException as e:
+            print(f"Couldn't update player: {e}")
+
+    def _now_playing_embed(self, song, guild_id, paused=False):
+        song_card = discord.Embed(
+            title=song.title, 
+            url=song.webpage_url,
+            description=song.uploader,
+            color=discord.Color.blue()
+        )
+
+        # set up author for embed card
+        author = "🎶 Now Playing" if not paused else "⏸️ Paused"
+        song_card.set_author(name=author)
+
+        # setup duration
+        song_card.add_field(name="Duration", value=song.duration or "Live", inline=True)
+
+        # footer setup
+        server_queue = self._get_queue(guild_id)
+        queue_count = len(server_queue)
+
+        if server_queue:
+            footer = f"Up next: {server_queue[0].title}"
+            footer += f" + {queue_count - 1} more" if (queue_count - 1) > 0 else ""
+        else:
+            footer = "Queue is empty"
+        song_card.set_footer(text=footer)
+
+        # thumbnail setup
+        song_card.set_thumbnail(url=song.thumbnail)
+
+        # requester setup
+        song_card.add_field(name="Requested by", value=song.requester, inline=True)
+
+        return song_card
 
     def _get_queue(self, server_id: int) -> Deque[Song]:
         '''Returns the server's queue, creating an empty one if needed.'''
         return self.queues.setdefault(server_id, deque())
 
     def _extract_audio(self, url: str) -> Song:
-        '''Uses yt_dlp to turn a YouTube link into (audio stream url, title).
+        '''Uses yt_dlp to turn a YouTube link into Song dataclass.
 
         Raises:
             youtube_dl.utils.DownloadError: If the video can't be loaded.
@@ -132,7 +216,24 @@ class MusicPlayer(commands.Cog):
                 raise ValueError("That link has no audio to play. Use a link to a specific video.")
             info = entries[0]
 
-        return info['url'], info.get('title', 'Unknown Title')
+        total = info.get('duration')
+        if total is None:
+            duration = None
+        else:
+            minutes, seconds = divmod(total, 60)
+            hours = 0
+            if minutes >= 60:
+                hours, minutes = divmod(minutes, 60)
+                duration = f"{hours}:{minutes:02d}:{seconds:02d}"
+            else:
+                duration = f"{minutes}:{seconds:02d}"
+
+        return Song(stream_url=info['url'],
+                    title=info.get('title', 'Unknown Title'),
+                    thumbnail=info.get('thumbnail'),
+                    duration=duration,
+                    uploader=info.get('uploader'),
+                    webpage_url=info.get('webpage_url', url))
 
     async def _reset_and_disconnect(self, server_id: int, voice_client: discord.VoiceClient):
         '''Clears the current audio and the server's queue, then disconnects.
@@ -145,6 +246,8 @@ class MusicPlayer(commands.Cog):
         queue = self.queues.get(server_id)
         if queue:
             queue.clear()
+
+        await self._close_player(guild_id=server_id, text="Session Ended")
 
         await voice_client.disconnect()
 
@@ -166,15 +269,16 @@ class MusicPlayer(commands.Cog):
         guild_id = interaction.guild.id
         server_queue = self.queues.get(interaction.guild.id)
         if not server_queue:
+            await self._close_player(guild_id, "Queue finished, use /play to add more")
             self.current_audio.pop(guild_id, None)
             return
 
         voice_client = interaction.guild.voice_client
 
         self.current_audio[guild_id] = server_queue.popleft()
-        audio_url, audio_title = self.current_audio[guild_id]
+        song = self.current_audio[guild_id]
 
-        source = await discord.FFmpegOpusAudio.from_probe(audio_url, **self.FFMPEG_OPTIONS)
+        source = await discord.FFmpegOpusAudio.from_probe(song.stream_url, **self.FFMPEG_OPTIONS)
 
         def after_playing(error):
             asyncio.run_coroutine_threadsafe(
@@ -186,13 +290,24 @@ class MusicPlayer(commands.Cog):
 
         # Sent to the channel (not as an interaction reply) so it still works
         # after the interaction expires (15 minutes)
-        try:
-            await interaction.channel.send(
-                f"Now Playing: \"{audio_title}\"",
-                view=MusicControls(self)
-            )
-        except discord.HTTPException as e:
-            print(f"Couldn't send Now Playing message: {e}")
+        await self._update_player(guild_id, interaction.channel)
+
+    # used in play command. checks if user input is an url or a song query
+    def identify_song_input(self, source):
+        source = source.strip()
+        parse_source = urlsplit(source)
+
+        # if http:// is not in scheme, then could be a link missing it or a song query
+        if not parse_source.scheme:
+            if re.match(YT_PATTERN, source):
+                # found youtube or youtu.be, just needs the https:// part
+                return "https://" + source
+            else:
+                # not a youtube link, probably a song query
+                return "ytsearch1:" + source
+        else:
+            # if valid youtube link with https:// then go ahead and play the audio
+            return source
 
     # used in play command. checks if user input is an url or a song query
     def identify_song_input(self, source):
@@ -244,7 +359,7 @@ class MusicPlayer(commands.Cog):
 
         # add music to queue
         try:
-            await interaction.response.send_message("Adding music to queue.")
+            await interaction.response.defer()
 
             if not bot_voice_client:
                 bot_voice_client = await user_voice_channel.connect()
@@ -252,15 +367,18 @@ class MusicPlayer(commands.Cog):
             if bot_voice_client.channel != user_voice_channel:
                 await bot_voice_client.move_to(user_voice_channel)
 
-            audio_url, audio_title = await asyncio.to_thread(self._extract_audio, song)
+            song = await asyncio.to_thread(self._extract_audio, url)
+            song.requester = interaction.user.mention
 
             # add audio to queue
-            self._get_queue(server_id).append((audio_url, audio_title))
-            await interaction.followup.send(f"Added \"{audio_title}\" to queue.")
-
+            self._get_queue(server_id).append(song)
+            await interaction.followup.send(f"{interaction.user.display_name} added \"{song.title}\" to queue.")
+            
             # plays next song in queue
             if not bot_voice_client.is_playing() and not bot_voice_client.is_paused():
                 await self.play_next(interaction)
+            else:
+                await self._update_player(server_id, interaction.channel, paused=bot_voice_client.is_paused())
 
         except youtube_dl.utils.DownloadError:  # video is private, deleted, restricted, etc.
             await interaction.followup.send(
@@ -278,17 +396,24 @@ class MusicPlayer(commands.Cog):
         bot_voice_client = interaction.guild.voice_client
 
         if not bot_voice_client:
-            await interaction.response.send_message("Muse is not connected to a voice chat")
+            await interaction.response.send_message("Muse is not connected to a voice chat", ephemeral=True)
             return
 
         current = self.current_audio.get(interaction.guild.id)
         if current is None or not (bot_voice_client.is_playing() or bot_voice_client.is_paused()):
-            await interaction.response.send_message("Nothing is playing")
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
 
-        _, audio_title = current
-        msg = "Now Paused: " if bot_voice_client.is_paused() else "Now Playing: "
-        await interaction.response.send_message(f"{msg}\"{audio_title}\"", view=MusicControls(self))
+        paused = bot_voice_client.is_paused()
+        old_message = self.player_messages.pop(interaction.guild_id, None)
+        if old_message:
+            try:
+                await old_message.delete()
+            except discord.HTTPException:
+                pass
+
+        await self._update_player(interaction.guild.id, interaction.channel, paused=paused)
+        await interaction.response.send_message("Player moved to the bottom", ephemeral=True)
 
     # ------------------------------------------------------------------
     # Button handlers (called by MusicControls)
@@ -302,17 +427,18 @@ class MusicPlayer(commands.Cog):
         server_queue = self._get_queue(interaction.guild.id)
 
         if not (voice_client and (voice_client.is_playing() or voice_client.is_paused())):
-            await interaction.response.send_message("Nothing is playing.")
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
 
-        _, current_audio_title = self.current_audio.get(interaction.guild.id)
+        song = self.current_audio.get(interaction.guild.id)
         # stopping triggers after_playing -> play_next, which starts the next song if there is one
         voice_client.stop()
 
+        user = interaction.user.display_name
         if len(server_queue) <= 0:
-            await interaction.response.send_message(f"Stopped {current_audio_title}.")
+            await interaction.response.send_message(f"{user} stopped {song.title}.")
         else:
-            await interaction.response.send_message(f"Skipped {current_audio_title}.")
+            await interaction.response.send_message(f"{user} skipped {song.title}.")
 
     async def end(self, interaction: discord.Interaction):
         '''Handles the End button interaction.
@@ -328,14 +454,14 @@ class MusicPlayer(commands.Cog):
                 )
 
             await self._reset_and_disconnect(interaction.guild.id, voice_client)
-
+            user = interaction.user.display_name
             await interaction.response.send_message(
-                "Stopped playback and disconnected from voice channel"
+                f"{user} stopped playback and disconnected bot from voice channel"
             )
         except Exception as e:
             print(f"Error in end: {e}")
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"Error: {e}")
+                await interaction.response.send_message(f"Error: {e}", ephemeral=True)
 
     async def view_queue(self, interaction: discord.Interaction):
         '''Handles View Queue button interaction.
@@ -353,33 +479,11 @@ class MusicPlayer(commands.Cog):
         else:
             msg = ""
             for i in range(min(5, len(queue))):
-                _, title = queue[i]
-                msg += f"{i + 1}. {title}\n"
+                song = queue[i]
+                msg += f"{i + 1}. {song.title} ({song.duration})\n"
 
         embed.add_field(name="Upcoming:", value=msg, inline=False)
-        await interaction.response.send_message(embed=embed)
-
-    async def pause(self, interaction: discord.Interaction):
-        '''Handles the Pause button interaction.
-        Pauses the music player if music player is playing audio.
-        '''
-        voice_client = interaction.guild.voice_client
-        if voice_client and voice_client.is_playing():
-            voice_client.pause()
-            await interaction.response.send_message("Paused music.")
-        else:
-            await interaction.response.send_message("Nothing is playing.")
-
-    async def resume(self, interaction: discord.Interaction):
-        '''Handles the Resume button interaction.
-        If current audio is paused, the bot will unpause the music player.
-        '''
-        voice_client = interaction.guild.voice_client
-        if voice_client and voice_client.is_paused():
-            voice_client.resume()
-            await interaction.response.send_message("Resumed music.")
-        else:
-            await interaction.response.send_message("Nothing is paused.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class MusicControls(discord.ui.View):
@@ -388,7 +492,7 @@ class MusicControls(discord.ui.View):
     Each button just calls the matching handler on MusicPlayer.
     '''
 
-    def __init__(self, musicPlayer: MusicPlayer):
+    def __init__(self, musicPlayer: MusicPlayer, paused: bool = False):
         '''Initializes the UI for musicPlayer
 
         Args:
@@ -397,26 +501,54 @@ class MusicControls(discord.ui.View):
         '''
         super().__init__(timeout=None)
         self.musicPlayer = musicPlayer
+        if paused:
+            self.pause_resume_button.label = "Resume"
+            self.pause_resume_button.emoji = "▶️"
+            self.pause_resume_button.style = discord.ButtonStyle.green
+        else:
+            self.pause_resume_button.label = "Pause"
+            self.pause_resume_button.emoji = "⏸️"
+            self.pause_resume_button.style = discord.ButtonStyle.gray
 
-    @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.skip(interaction)
 
-    @discord.ui.button(label="End", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="End", style=discord.ButtonStyle.red, emoji="⏹️")
     async def end_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.end(interaction)
 
-    @discord.ui.button(label="View Queue", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="View Queue", style=discord.ButtonStyle.green, emoji="📜")
     async def view_queue_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.view_queue(interaction)
 
-    @discord.ui.button(label="Pause", style=discord.ButtonStyle.gray)
-    async def pause_button(self, interaction: discord.Interaction, button: Button):
-        await self.musicPlayer.pause(interaction)
+    @discord.ui.button(label="Pause", style=discord.ButtonStyle.gray, emoji="⏸️")
+    async def pause_resume_button(self, interaction: discord.Interaction, button: Button):
+        voice_client = interaction.guild.voice_client
+        song = self.musicPlayer.current_audio.get(interaction.guild.id)
 
-    @discord.ui.button(label="Resume", style=discord.ButtonStyle.blurple)
-    async def resume_button(self, interaction: discord.Interaction, button: Button):
-        await self.musicPlayer.resume(interaction)
+        if voice_client and voice_client.is_paused(): # resume if audio was paused
+            voice_client.resume()
+            self.pause_resume_button.label = "Pause"
+            self.pause_resume_button.emoji = "⏸️"
+            self.pause_resume_button.style = discord.ButtonStyle.gray
+
+            await interaction.response.edit_message(
+                embed=self.musicPlayer._now_playing_embed(song, interaction.guild.id, paused=False), view=self
+            )
+
+        elif voice_client and voice_client.is_playing(): # pause if audio is playing
+            voice_client.pause()
+            self.pause_resume_button.label = "Resume"
+            self.pause_resume_button.emoji = "▶️"
+            self.pause_resume_button.style = discord.ButtonStyle.green
+
+            await interaction.response.edit_message(
+                embed=self.musicPlayer._now_playing_embed(song, interaction.guild.id, paused=True), view=self
+            )
+
+        else:
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
 
 
 async def setup(bot):
