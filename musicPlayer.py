@@ -255,7 +255,7 @@ class MusicPlayer(commands.Cog):
 
         _, audio_title = current
         msg = "Now Paused: " if bot_voice_client.is_paused() else "Now Playing: "
-        await interaction.response.send_message(f"{msg}\"{audio_title}\"", view=MusicControls(self))
+        await interaction.response.send_message(f"{msg}\"{audio_title}\"", view=MusicControls(self, paused=bot_voice_client.is_paused()))
 
     # ------------------------------------------------------------------
     # Button handlers (called by MusicControls)
@@ -326,28 +326,6 @@ class MusicPlayer(commands.Cog):
         embed.add_field(name="Upcoming:", value=msg, inline=False)
         await interaction.response.send_message(embed=embed)
 
-    async def pause(self, interaction: discord.Interaction):
-        '''Handles the Pause button interaction.
-        Pauses the music player if music player is playing audio.
-        '''
-        voice_client = interaction.guild.voice_client
-        if voice_client and voice_client.is_playing():
-            voice_client.pause()
-            await interaction.response.send_message("Paused music.")
-        else:
-            await interaction.response.send_message("Nothing is playing.")
-
-    async def resume(self, interaction: discord.Interaction):
-        '''Handles the Resume button interaction.
-        If current audio is paused, the bot will unpause the music player.
-        '''
-        voice_client = interaction.guild.voice_client
-        if voice_client and voice_client.is_paused():
-            voice_client.resume()
-            await interaction.response.send_message("Resumed music.")
-        else:
-            await interaction.response.send_message("Nothing is paused.")
-
 
 class MusicControls(discord.ui.View):
     '''Buttons shown under "Now Playing" messages.
@@ -355,7 +333,7 @@ class MusicControls(discord.ui.View):
     Each button just calls the matching handler on MusicPlayer.
     '''
 
-    def __init__(self, musicPlayer: MusicPlayer):
+    def __init__(self, musicPlayer: MusicPlayer, paused: bool = False):
         '''Initializes the UI for musicPlayer
 
         Args:
@@ -364,6 +342,14 @@ class MusicControls(discord.ui.View):
         '''
         super().__init__(timeout=None)
         self.musicPlayer = musicPlayer
+        if paused:
+            self.pause_resume_button.label = "Resume"
+            self.pause_resume_button.emoji = "▶️"
+            self.pause_resume_button.style = discord.ButtonStyle.green
+        else:
+            self.pause_resume_button.label = "Pause"
+            self.pause_resume_button.emoji = "⏸️"
+            self.pause_resume_button.style = discord.ButtonStyle.gray
 
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: Button):
@@ -378,12 +364,27 @@ class MusicControls(discord.ui.View):
         await self.musicPlayer.view_queue(interaction)
 
     @discord.ui.button(label="Pause", style=discord.ButtonStyle.gray, emoji="⏸️")
-    async def pause_button(self, interaction: discord.Interaction, button: Button):
-        await self.musicPlayer.pause(interaction)
+    async def pause_resume_button(self, interaction: discord.Interaction, button: Button):
+        voice_client = interaction.guild.voice_client
 
-    @discord.ui.button(label="Resume", style=discord.ButtonStyle.blurple, emoji="▶️")
-    async def resume_button(self, interaction: discord.Interaction, button: Button):
-        await self.musicPlayer.resume(interaction)
+        if voice_client and voice_client.is_paused(): # resume if audio was paused
+            voice_client.resume()
+            self.pause_resume_button.label = "Pause"
+            self.pause_resume_button.emoji = "⏸️"
+            self.pause_resume_button.style = discord.ButtonStyle.gray
+
+            await interaction.response.edit_message(view=self)
+
+        elif voice_client and voice_client.is_playing(): # pause if audio is playing
+            voice_client.pause()
+            self.pause_resume_button.label = "Resume"
+            self.pause_resume_button.emoji = "▶️"
+            self.pause_resume_button.style = discord.ButtonStyle.green
+
+            await interaction.response.edit_message(view=self)
+
+        else:
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
 
 
 async def setup(bot):
