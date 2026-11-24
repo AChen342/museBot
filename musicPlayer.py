@@ -211,7 +211,7 @@ class MusicPlayer(commands.Cog):
         bot_voice_client = interaction.guild.voice_client
 
         try:
-            await interaction.response.send_message("Adding music to queue.")
+            await interaction.response.defer()
 
             if not bot_voice_client:
                 bot_voice_client = await user_voice_channel.connect()
@@ -220,10 +220,11 @@ class MusicPlayer(commands.Cog):
                 await bot_voice_client.move_to(user_voice_channel)
 
             audio_url, audio_title = await asyncio.to_thread(self._extract_audio, url)
+            user = interaction.user.display_name
 
             # add audio to queue
             self._get_queue(server_id).append((audio_url, audio_title))
-            await interaction.followup.send(f"Added \"{audio_title}\" to queue.")
+            await interaction.followup.send(f"{user} added \"{audio_title}\" to queue.")
 
             # plays next song in queue
             if not bot_voice_client.is_playing() and not bot_voice_client.is_paused():
@@ -245,12 +246,12 @@ class MusicPlayer(commands.Cog):
         bot_voice_client = interaction.guild.voice_client
 
         if not bot_voice_client:
-            await interaction.response.send_message("Muse is not connected to a voice chat")
+            await interaction.response.send_message("Muse is not connected to a voice chat", ephemeral=True)
             return
 
         current = self.current_audio.get(interaction.guild.id)
         if current is None or not (bot_voice_client.is_playing() or bot_voice_client.is_paused()):
-            await interaction.response.send_message("Nothing is playing")
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
 
         _, audio_title = current
@@ -269,17 +270,18 @@ class MusicPlayer(commands.Cog):
         server_queue = self._get_queue(interaction.guild.id)
 
         if not (voice_client and (voice_client.is_playing() or voice_client.is_paused())):
-            await interaction.response.send_message("Nothing is playing.")
+            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
 
         _, current_audio_title = self.current_audio.get(interaction.guild.id)
         # stopping triggers after_playing -> play_next, which starts the next song if there is one
         voice_client.stop()
 
+        user = interaction.user.display_name
         if len(server_queue) <= 0:
-            await interaction.response.send_message(f"Stopped {current_audio_title}.")
+            await interaction.response.send_message(f"{user} stopped {current_audio_title}.")
         else:
-            await interaction.response.send_message(f"Skipped {current_audio_title}.")
+            await interaction.response.send_message(f"{user} skipped {current_audio_title}.")
 
     async def end(self, interaction: discord.Interaction):
         '''Handles the End button interaction.
@@ -295,14 +297,14 @@ class MusicPlayer(commands.Cog):
                 )
 
             await self._reset_and_disconnect(interaction.guild.id, voice_client)
-
+            user = interaction.user.display_name
             await interaction.response.send_message(
-                "Stopped playback and disconnected from voice channel"
+                f"{user} stopped playback and disconnected bot from voice channel"
             )
         except Exception as e:
             print(f"Error in end: {e}")
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"Error: {e}")
+                await interaction.response.send_message(f"Error: {e}", ephemeral=True)
 
     async def view_queue(self, interaction: discord.Interaction):
         '''Handles View Queue button interaction.
@@ -324,7 +326,7 @@ class MusicPlayer(commands.Cog):
                 msg += f"{i + 1}. {title}\n"
 
         embed.add_field(name="Upcoming:", value=msg, inline=False)
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class MusicControls(discord.ui.View):
