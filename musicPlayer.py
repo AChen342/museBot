@@ -94,7 +94,6 @@ class MusicPlayer(commands.Cog):
     # ==================================================================
     # Events
     # ==================================================================
-
     @commands.Cog.listener()
     async def on_ready(self):
         '''Registers the slash commands with Discord when the bot starts.'''
@@ -135,6 +134,49 @@ class MusicPlayer(commands.Cog):
     # ==================================================================
     # Slash commands
     # ==================================================================
+    
+    @app_commands.command(name="remove", description="remove a song from queue")
+    @app_commands.describe(index="The song position in the queue")
+    async def remove(self, interaction: discord.Interaction, index: app_commands.Range[int, 1, 100]):
+        '''Removes song from the queue based on the index
+        
+        Args:
+            index: The position of the song being removed
+        '''
+        if not interaction.user.voice:
+            await interaction.response.send_message(
+                "You need to be in a voice chat to use this command.",
+                ephemeral=True
+            )
+            return
+
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            await interaction.response.send_message("Muse isn't playing anything right now.", ephemeral=True)
+            return
+
+        if interaction.user.voice.channel != interaction.guild.voice_client.channel:
+            await interaction.response.send_message(
+                "Join Muse's voice channel to use this command.",
+                ephemeral=True
+            )
+            return
+
+        guild_id = interaction.guild_id        
+        server_queue = self._get_queue(guild_id)
+        
+        # check if index is within bounds
+        if index < 1 or index > len(server_queue):
+            await interaction.response.send_message(
+                f"There's no song #{index} in the queue. Check View Queue for the numbers.",
+                ephemeral=True
+            )
+            return
+
+        removed = server_queue[index - 1]
+        del server_queue[index - 1]
+        await interaction.response.send_message(f"{interaction.user.display_name} removed \"{removed.title}\" from the queue.")        
+        await self._update_player(guild_id, interaction.channel, paused=voice_client.is_paused())
 
     @app_commands.command(name="play", description="play a YouTube link or search for a song")
     @app_commands.describe(query="A YouTube link or a song name")
