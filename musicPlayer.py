@@ -569,6 +569,20 @@ class MusicControls(discord.ui.View):
         else:
             button.label, button.emoji, button.style = "Pause", "⏸️", discord.ButtonStyle.gray
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.data.get("custom_id") == self.view_queue_button.custom_id:
+            return True
+
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            return True
+
+        if (not interaction.user.voice) or interaction.user.voice.channel != voice_client.channel:
+            await interaction.response.send_message("Join Muse's voice channel to control the music.", ephemeral=True)
+            return False
+        
+        return True
+
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.skip(interaction)
