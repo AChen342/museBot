@@ -57,6 +57,7 @@ class MusicPlayer(commands.Cog):
         self.current_audio: dict[int, Song] = {}               # the song playing right now
         self.player_messages: dict[int, discord.Message] = {}  # the live player message
         self.idle_timers: dict[int, asyncio.Task] = {}         # countdown to leave when idle
+        self.loop_modes: dict[int, str] = {}                   # "off", "song", "queue"
 
     # ==================================================================
     # Events
@@ -217,6 +218,33 @@ class MusicPlayer(commands.Cog):
     # ==================================================================
     # Button handlers (called by MusicControls)
     # ==================================================================
+    async def loop(self, interaction: discord.Interaction):
+        '''Loop button: switches the loop mode off -> song -> queue -> off.
+
+        - off:   songs play once
+        - song:  the current song repeats
+        - queue: finished songs go back to the end of the queue, so the whole queue repeats
+        '''
+        guild_id = interaction.guild.id
+        voice_client = interaction.guild.voice_client
+
+        if not self._is_active(voice_client):
+            await interaction.response.send_message("Muse is not playing anything right now to loop.", ephemeral=True)
+            return
+
+        current = self._loop_mode(guild_id)
+        new_mode = {"off": "song", "song": "queue", "queue": "off"}[current]
+        self.loop_modes[guild_id] = new_mode
+
+        # update the button on the player (that answers the click), then announce it to everyone
+        paused = voice_client.is_paused()
+        await interaction.response.edit_message(
+            embed=self._now_playing_embed(guild_id, paused=paused),
+            view=self._controls(guild_id, paused=paused)
+        )
+
+        icon = "🔂" if new_mode == "song" else "🔁"
+        await interaction.followup.send(f"{icon} {interaction.user.display_name} set loop to: {new_mode}.")
 
     async def skip(self, interaction: discord.Interaction):
         '''Skip button: stops the current song. The next one (if any) starts automatically.'''
@@ -228,11 +256,19 @@ class MusicPlayer(commands.Cog):
             return
 
         song = self.current_audio.get(guild_id)
-        # stopping triggers after_playing -> play_next, which starts the next song if there is one
+        mode = self._loop_mode(guild_id)
+
+        if mode == "song":
+            # forget the current song so loop doesn't put it straight back:
+            # the next song plays (and becomes the one that loops)
+            self.current_audio.pop(guild_id, None)
+
+        # stopping triggers after_playing -> play_next, which starts the next song if there is one.
+        # With loop "queue", the skipped song stays in the rotation (it goes to the end of the queue).
         voice_client.stop()
 
         user = interaction.user.display_name
-        if not self._get_queue(guild_id):
+        if not self._get_queue(guild_id) and mode != "queue":
             await interaction.response.send_message(f"{user} stopped {song.title}.")
         else:
             await interaction.response.send_message(f"{user} skipped {song.title}.")
@@ -276,7 +312,7 @@ class MusicPlayer(commands.Cog):
         paused = bool(voice_client and voice_client.is_paused())
         await interaction.response.edit_message(
             embed=self._now_playing_embed(guild_id, paused=paused),
-            view=MusicControls(self, paused=paused)
+            view=self._controls(guild_id, paused=paused)
         )
 
     async def view_queue(self, interaction: discord.Interaction):
@@ -377,8 +413,19 @@ class MusicPlayer(commands.Cog):
         guild_id = interaction.guild.id
         voice_client = interaction.guild.voice_client
 
+        server_queue = self._get_queue(guild_id)
+
+        # loop: put the song that just finished back into the queue.
+        # (Must happen before the "queue is empty" check, or a single looping song would end the session.
+        # After End, a kick, or a song that couldn't play, current_audio is already cleared, so nothing is re-added.)
+        finished = self.current_audio.get(guild_id)
+        mode = self._loop_mode(guild_id)
+        if finished and mode == "song":
+            server_queue.appendleft(finished)    # play it again next
+        elif finished and mode == "queue":
+            server_queue.append(finished)        # back to the end of the line
+
         # queue is empty: the session is over (but stay in voice a while in case more songs come)
-        server_queue = self.queues.get(guild_id)
         if not server_queue:
             await self._reset_state(guild_id, "Queue finished, use /play to add more")
             if voice_client and voice_client.is_connected():
@@ -410,11 +457,24 @@ class MusicPlayer(commands.Cog):
             self._cancel_idle_timer(guild_id)
 
         except Exception as e:
-            # this song can't be played (e.g. its link expired): skip it so the queue doesn't freeze
+            # the stream link may have expired: try once more with a fresh link
             print(f"Unable to play song: {e}")
-            await interaction.channel.send(f"Couldn't play {song.title}, skipping.")
-            await self.play_next(interaction)
-            return
+
+            try:
+                fresh = await asyncio.to_thread(extract_audio, song.webpage_url)
+                fresh.requester = song.requester
+                self.current_audio[guild_id] = fresh
+
+                source = await discord.FFmpegOpusAudio.from_probe(fresh.stream_url, **self.FFMPEG_OPTIONS)
+                voice_client.play(source, after=after_playing)
+                self._cancel_idle_timer(guild_id)
+            
+            except Exception as e:
+                print(f"Still unable to play song: {e}")
+                self.current_audio.pop(guild_id, None)
+                await interaction.channel.send(f"Couldn't play {song.title}, skipping.")
+                await self.play_next(interaction)
+                return
 
         await self._update_player(guild_id, interaction.channel)
 
@@ -425,6 +485,14 @@ class MusicPlayer(commands.Cog):
     def _now_playing_embed(self, guild_id: int, paused: bool = False) -> discord.Embed:
         '''Builds the "Now Playing" card for this server's current song and queue.'''
         return now_playing_embed(self.current_audio.get(guild_id), self._get_queue(guild_id), paused=paused)
+
+    def _controls(self, guild_id: int, paused: bool = False) -> MusicControls:
+        '''Builds the player's buttons, showing this server's pause state and loop mode.'''
+        return MusicControls(self, paused=paused, loop_mode=self._loop_mode(guild_id))
+
+    def _loop_mode(self, guild_id: int) -> str:
+        '''This server's loop mode: "off", "song" or "queue".'''
+        return self.loop_modes.get(guild_id, "off")
 
     async def _refresh_player(self, interaction: discord.Interaction):
         '''Updates the player for the interaction's server, if a song is playing or paused.
@@ -443,7 +511,7 @@ class MusicPlayer(commands.Cog):
         replies can only be edited for 15 minutes.
         '''
         embed = self._now_playing_embed(guild_id, paused=paused)
-        view = MusicControls(self, paused=paused)
+        view = self._controls(guild_id, paused=paused)
 
         try:
             message = self.player_messages.get(guild_id)
@@ -510,6 +578,7 @@ class MusicPlayer(commands.Cog):
         self._get_queue(guild_id).clear()
         self.current_audio.pop(guild_id, None)
         self._cancel_idle_timer(guild_id)
+        self.loop_modes.pop(guild_id, None)
         await self._close_player(guild_id, text)
 
     async def _reset_and_disconnect(self, guild_id: int, voice_client: discord.VoiceClient):

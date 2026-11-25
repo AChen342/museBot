@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.0] - 2026-11-25
+### Added
+- Loop button that switches between three modes: off, song (repeat the current song)
+  and queue (repeat the whole queue); loop modes are unique to each server
+- The Loop button shows the current mode (🔁 Loop: Off, 🔂 Loop: Song, 🔁 Loop: Queue)
+- Muse announces who changed the loop mode
+
+### Changed
+- Player buttons are now in two rows: Skip, End, Shuffle, Pause on the first,
+  Loop and View Queue on the second
+- Skip while looping a song moves on to the next song (which then loops);
+  skip while looping the queue keeps the skipped song in the rotation
+- Loop turns off when the session ends (End, idle timeout, kicked, or everyone leaves)
+
+### Fixed
+- Songs whose stream link expired (after a few hours, e.g. in a long loop) are looked up
+  again and keep playing instead of being skipped
+- A song that really can't be played is skipped once instead of repeating "Couldn't play"
+  forever while looping
+
 ## [v3.0.0] - 2026-11-25
 ### Added
 - "/play" can now search YouTube by song name, not just play links

@@ -15,19 +15,24 @@ if TYPE_CHECKING:
 class MusicControls(discord.ui.View):
     '''The buttons under the player message.
 
-    Skip, End, Shuffle and View Queue call the matching handler on MusicPlayer.
+    Row 1: Skip, End, Shuffle, Pause/Resume
+    Row 2: Loop, View Queue
+
+    Skip, End, Shuffle, Loop and View Queue call the matching handler on MusicPlayer.
     Pause/Resume is one button that switches between the two.
     '''
 
-    def __init__(self, musicPlayer: "MusicPlayer", paused: bool = False):
+    def __init__(self, musicPlayer: "MusicPlayer", paused: bool = False, loop_mode: str = "off"):
         '''
         Args:
             musicPlayer: The MusicPlayer cog the buttons control.
             paused: Whether the music is paused right now (decides Pause vs Resume).
+            loop_mode: The server's loop mode ("off", "song" or "queue"), shown on the Loop button.
         '''
         super().__init__(timeout=None)
         self.musicPlayer = musicPlayer
         self._show_paused(paused)
+        self._show_loop(loop_mode)
 
     def _show_paused(self, paused: bool):
         '''Makes the toggle look like "Resume" (when paused) or "Pause" (when playing).'''
@@ -36,6 +41,16 @@ class MusicControls(discord.ui.View):
             button.label, button.emoji, button.style = "Resume", "▶️", discord.ButtonStyle.green
         else:
             button.label, button.emoji, button.style = "Pause", "⏸️", discord.ButtonStyle.gray
+
+    def _show_loop(self, loop_mode: str):
+        '''Makes the Loop button show the current mode (green while looping).'''
+        button = self.loop_button
+        if loop_mode == "song":
+            button.label, button.emoji, button.style = "Loop: Song", "🔂", discord.ButtonStyle.green
+        elif loop_mode == "queue":
+            button.label, button.emoji, button.style = "Loop: Queue", "🔁", discord.ButtonStyle.green
+        else:
+            button.label, button.emoji, button.style = "Loop: Off", "🔁", discord.ButtonStyle.gray
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         '''Runs before every button press: only people in Muse's voice channel can control it.
@@ -56,23 +71,29 @@ class MusicControls(discord.ui.View):
 
         return True
 
-    @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple, emoji="⏭️")
+    # row=0 is the first row of buttons, row=1 the second (Discord fits at most 5 per row)
+
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple, emoji="⏭️", row=0)
     async def skip_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.skip(interaction)
 
-    @discord.ui.button(label="End", style=discord.ButtonStyle.red, emoji="⏹️")
+    @discord.ui.button(label="End", style=discord.ButtonStyle.red, emoji="⏹️", row=0)
     async def end_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.end(interaction)
 
-    @discord.ui.button(label="Shuffle", style=discord.ButtonStyle.green, emoji="🔀")
+    @discord.ui.button(label="Shuffle", style=discord.ButtonStyle.green, emoji="🔀", row=0)
     async def shuffle_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.shuffle(interaction)
 
-    @discord.ui.button(label="View Queue", style=discord.ButtonStyle.green, emoji="📜")
+    @discord.ui.button(label="Loop: Off", style=discord.ButtonStyle.gray, emoji="🔁", row=1)
+    async def loop_button(self, interaction: discord.Interaction, button: Button):
+        await self.musicPlayer.loop(interaction)
+
+    @discord.ui.button(label="View Queue", style=discord.ButtonStyle.green, emoji="📜", row=1)
     async def view_queue_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.view_queue(interaction)
 
-    @discord.ui.button(label="Pause", style=discord.ButtonStyle.gray, emoji="⏸️")
+    @discord.ui.button(label="Pause", style=discord.ButtonStyle.gray, emoji="⏸️", row=0)
     async def pause_resume_button(self, interaction: discord.Interaction, button: Button):
         '''Pauses if playing, resumes if paused, and updates the player to match.'''
         guild_id = interaction.guild.id
