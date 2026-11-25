@@ -63,7 +63,7 @@ class MusicPlayer(commands.Cog):
     }
 
     # used to disconnect bot when idle
-    IDLE_TIMEOUT = 20 # change as needed default is 300s (5 minutes)
+    IDLE_TIMEOUT = 300 # change as needed default is 300s (5 minutes)
 
     # Options for yt_dlp
     YDL_OPTIONS = {
