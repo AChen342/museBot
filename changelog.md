@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.0.0] - 2026-11-25
+### Added
+- "/play" can now search YouTube by song name, not just play links
+  (links without "https://", like "youtu.be/...", also work)
+- New "/playnext" command to add a song to the front of the queue
+- New "/remove" command to remove a song from the queue by its View Queue number
+- Shuffle button to shuffle the upcoming songs
+- "Now Playing" card (embed) with thumbnail, clickable title, channel, duration,
+  who requested it, and what plays next
+- One live player message per server that updates as songs change, instead of a
+  new message for every song; it closes with "Queue finished" or "Session ended"
+- Emoji icons on all player buttons
+- Song durations shown on the player and in View Queue
+- Muse leaves the voice channel after 5 minutes with nothing playing
+- Muse names who skipped, stopped, added or removed a song
+
+### Changed
+- Pause and Resume are now one button that switches between the two
+- "/options" now moves the player to the bottom of the channel
+- Only people in Muse's voice channel can use the player buttons, "/playnext" and "/remove"
+  (View Queue stays open to everyone)
+- Error messages and button feedback ("Nothing is playing", View Queue) are now private
+- Queues and the current song are now tracked per server by server ID
+- Song lookups run in the background, so the bot no longer freezes while searching
+- Audio bitrate raised from 32 kbps to 128 kbps
+- Updated to discord.py 2.7.1 (needed for Discord's new voice encryption) and pinned
+  davey 0.1.7; requires Python 3.14
+- Updated yt-dlp; YouTube lookups now use IPv4 and the "visionos" client to avoid
+  403 errors
+- Uses the system FFmpeg on Linux so the bot can run on a Linux server
+- Split musicPlayer.py into a "music" package (youtube, embeds, controls, cog)
+
+### Fixed
+- Queue no longer stops after 15 minutes
+- Skip now works on the last song and names the song being skipped
+- A song that fails to load is skipped instead of freezing the queue
+- One bad link no longer disconnects the bot while other songs are playing
+- Muse cleans up its queue and player when kicked from voice or when everyone leaves
+- Playlist and "Mix" links no longer show "Unknown Title" or fail to play
+- Playback errors are now logged instead of disappearing silently
+
+### Removed
+- "/ping", "/stats" and "/invite" commands (utils cog no longer loaded)
+
 ## [v2.2.0] - 2025-09-08
 ### Removed
 - Removed all looping functions
