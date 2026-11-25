@@ -299,6 +299,7 @@ class MusicPlayer(commands.Cog):
         if error:
             await interaction.channel.send(f"Playback error: {error}")
 
+        voice_client = interaction.guild.voice_client
         guild_id = interaction.guild.id
 
         # queue is empty: the session is over
@@ -311,7 +312,6 @@ class MusicPlayer(commands.Cog):
             return
 
         # Muse is no longer in voice (e.g. kicked): clean up instead of trying every song
-        voice_client = interaction.guild.voice_client
         if not (voice_client and voice_client.is_connected()):
             await self._reset_state(guild_id, "Disconnected from voice chat")
             return
@@ -425,7 +425,7 @@ class MusicPlayer(commands.Cog):
         '''
         Cancels bot timeout timer
         '''
-        timer = self.idle_timer.pop(guild_id, None)
+        timer = self.idle_timers.pop(guild_id, None)
         if timer:
             timer.cancel()
 
@@ -433,8 +433,8 @@ class MusicPlayer(commands.Cog):
         '''
         Starts timeout timer when bot starts idling
         '''
-        self._cancel_idle_timer(guild) # cancels existing timer
-        self.idle_timer[guild.id] = asyncio.create_task(self._leave_after_idle(guild))
+        self._cancel_idle_timer(guild.id) # cancels existing timer
+        self.idle_timers[guild.id] = asyncio.create_task(self._leave_after_idle(guild))
 
     async def _leave_after_idle(self, guild):
         '''
@@ -444,7 +444,7 @@ class MusicPlayer(commands.Cog):
         self.idle_timers.pop(guild.id, None)
         voice_client = guild.voice_client
 
-        if voice_client and voice_client.is_connected() and not (voice_client.is_playing() and voice_client.is_paused()):
+        if voice_client and voice_client.is_connected() and not (voice_client.is_playing() or voice_client.is_paused()):
             await self._reset_and_disconnect(guild.id, voice_client)
 
     async def _reset_state(self, guild_id: int, text: str):
