@@ -1,44 +1,27 @@
 '''
-Music player cog for Muse bot.
+The music cog: slash commands, button logic, playback and cleanup.
 
-Plays music from YouTube in Discord voice channels. Each server gets its own
-song queue and one "live" player message that updates as songs change.
-
-How this file is laid out:
-    Song             - the data stored for each queued song
-    MusicPlayer      - the cog: commands, events, playback and cleanup
-    MusicControls    - the buttons under the player message
+Each server gets its own song queue and one "live" player message that
+updates as songs change. Song lookups live in youtube.py, the cards in
+embeds.py, and the buttons in controls.py.
 '''
 import asyncio
 import os
 import random
-import re
 from collections import deque
-from dataclasses import dataclass
 from typing import Deque, Optional
-from urllib.parse import urlsplit
 
 import discord
-import yt_dlp as youtube_dl
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Button
+
+from .controls import MusicControls
+from .embeds import closed_player_embed, now_playing_embed, queue_embed
+from .youtube import DownloadError, Song, extract_audio, identify_song_input
 
 
-# Matches YouTube links typed without "https://", e.g. "youtube.com/watch?v=..." or "youtu.be/..."
-YT_PATTERN = r'^(?:(?:www|m|music)\.)?(?:youtube\.com|youtu\.be)/'
-
-
-@dataclass
-class Song:
-    '''Everything the bot needs to play and display one song.'''
-    stream_url: str            # direct audio link that FFmpeg plays
-    title: str
-    webpage_url: str           # normal YouTube link, used for the clickable title
-    thumbnail: Optional[str]
-    duration: Optional[str]    # e.g. "3:33" or "1:02:05"; None for live streams
-    uploader: Optional[str]    # YouTube channel name
-    requester: str = ""        # mention of the user who added it, e.g. "<@123>"
+# The project folder (one level above this "music" folder), where bin/ffmpeg.exe lives
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class MusicPlayer(commands.Cog):
@@ -50,7 +33,7 @@ class MusicPlayer(commands.Cog):
 
     # Bundled ffmpeg.exe on Windows; the system-installed ffmpeg everywhere else (e.g. Linux server)
     FFMPEG_PATH = (
-        os.path.join(os.path.dirname(__file__), 'bin', 'ffmpeg.exe')
+        os.path.join(PROJECT_DIR, 'bin', 'ffmpeg.exe')
         if os.name == 'nt' else 'ffmpeg'
     )
 
@@ -65,22 +48,6 @@ class MusicPlayer(commands.Cog):
 
     # Leave voice after this many seconds with nothing playing (use ~20 while testing)
     IDLE_TIMEOUT = 300
-
-    # Options for yt_dlp
-    YDL_OPTIONS = {
-        'format': 'bestaudio/best',
-        'quiet': True,
-        'no_warnings': True,
-        # Force IPv4: YouTube returns 403 Forbidden for stream links tied to our IPv6 address
-        'source_address': '0.0.0.0',
-        # Other YouTube clients (tv, web, android) often return links that fail with 403;
-        # visionos was the only one that worked for every video tested (Nov 2026)
-        'extractor_args': {'youtube': {'player_client': ['visionos']}},
-        # A video link with &list=... plays just that video, not the whole playlist
-        'noplaylist': True,
-        # For playlist links, only load the first video (must be a string, not an int)
-        'playlist_items': '1'
-    }
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -308,27 +275,13 @@ class MusicPlayer(commands.Cog):
         voice_client = interaction.guild.voice_client
         paused = bool(voice_client and voice_client.is_paused())
         await interaction.response.edit_message(
-            embed=self._now_playing_embed(self.current_audio.get(guild_id), guild_id, paused=paused),
+            embed=self._now_playing_embed(guild_id, paused=paused),
             view=MusicControls(self, paused=paused)
         )
 
     async def view_queue(self, interaction: discord.Interaction):
         '''View Queue button: privately shows the next five songs.'''
-        server_queue = self._get_queue(interaction.guild.id)
-        embed = discord.Embed(
-            title="Next on your queue",
-            description="Displays next five songs in your queue.",
-            color=discord.Color.purple()
-        )
-
-        if not server_queue:
-            msg = "Your queue is empty."
-        else:
-            msg = ""
-            for i, song in enumerate(list(server_queue)[:5], start=1):
-                msg += f"{i}. {song.title} ({song.duration or 'Live'})\n"
-
-        embed.add_field(name="Upcoming:", value=msg, inline=False)
+        embed = queue_embed(self._get_queue(interaction.guild.id))
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ==================================================================
@@ -377,9 +330,9 @@ class MusicPlayer(commands.Cog):
         # a link plays directly; anything else becomes a YouTube search.
         # The lookup runs in a background thread so the bot doesn't freeze meanwhile.
         try:
-            source = self._identify_song_input(query)
-            song = await asyncio.to_thread(self._extract_audio, source)
-        except youtube_dl.utils.DownloadError:  # video is private, deleted, restricted, etc.
+            source = identify_song_input(query)
+            song = await asyncio.to_thread(extract_audio, source)
+        except DownloadError:  # video is private, deleted, restricted, etc.
             await interaction.followup.send(
                 "Couldn't load that link. It may be privated, deleted, restricted or not a valid video."
             )
@@ -469,30 +422,9 @@ class MusicPlayer(commands.Cog):
     # Player message (the one embed per server that keeps updating)
     # ==================================================================
 
-    def _now_playing_embed(self, song: Song, guild_id: int, paused: bool = False) -> discord.Embed:
-        '''Builds the "Now Playing" card for a song.'''
-        embed = discord.Embed(
-            title=song.title,
-            url=song.webpage_url,
-            description=song.uploader,
-            color=discord.Color.blue()
-        )
-        embed.set_author(name="⏸️ Paused" if paused else "🎶 Now Playing")
-        embed.set_thumbnail(url=song.thumbnail)
-        embed.add_field(name="Duration", value=song.duration or "Live", inline=True)
-        embed.add_field(name="Requested by", value=song.requester, inline=True)
-
-        # footer: what plays next
-        server_queue = self._get_queue(guild_id)
-        if server_queue:
-            footer = f"Up next: {server_queue[0].title}"
-            if len(server_queue) > 1:
-                footer += f" + {len(server_queue) - 1} more"
-        else:
-            footer = "Queue is empty"
-        embed.set_footer(text=footer)
-
-        return embed
+    def _now_playing_embed(self, guild_id: int, paused: bool = False) -> discord.Embed:
+        '''Builds the "Now Playing" card for this server's current song and queue.'''
+        return now_playing_embed(self.current_audio.get(guild_id), self._get_queue(guild_id), paused=paused)
 
     async def _refresh_player(self, interaction: discord.Interaction):
         '''Updates the player for the interaction's server, if a song is playing or paused.
@@ -510,8 +442,7 @@ class MusicPlayer(commands.Cog):
         Always uses channel.send (never an interaction reply), because interaction
         replies can only be edited for 15 minutes.
         '''
-        song = self.current_audio.get(guild_id)
-        embed = self._now_playing_embed(song, guild_id, paused=paused)
+        embed = self._now_playing_embed(guild_id, paused=paused)
         view = MusicControls(self, paused=paused)
 
         try:
@@ -537,14 +468,12 @@ class MusicPlayer(commands.Cog):
         if not message:
             return
 
-        closed_card = discord.Embed(title=text, color=discord.Color.dark_gray())
-
         view = MusicControls(self)
         for item in view.children:
             item.disabled = True
 
         try:
-            await message.edit(embed=closed_card, view=view)
+            await message.edit(embed=closed_player_embed(text), view=view)
         except discord.HTTPException as e:
             print(f"Couldn't close player: {e}")
 
@@ -598,161 +527,9 @@ class MusicPlayer(commands.Cog):
             await self._reset_and_disconnect(guild_id, voice_client)
 
     # ==================================================================
-    # Song lookup (YouTube)
-    # ==================================================================
-
-    def _identify_song_input(self, query: str) -> str:
-        '''Turns what the user typed in /play into something yt_dlp understands.
-
-        Returns the link unchanged, adds "https://" to a YouTube link typed
-        without it, or turns anything else into a YouTube search.
-        '''
-        query = query.strip()
-
-        # a full link (http:// or https://), play it as-is
-        if urlsplit(query).scheme in ('http', 'https'):
-            return query
-
-        # found youtube or youtu.be, just needs the https:// part
-        if re.match(YT_PATTERN, query):
-            return "https://" + query
-
-        # not a link, so it's a song query: use the first YouTube search result.
-        # (Checking for http/https above, instead of any scheme, keeps queries with
-        # a colon like "Re:Zero opening" from being mistaken for a link.)
-        return "ytsearch1:" + query
-
-    def _extract_audio(self, url: str) -> Song:
-        '''Uses yt_dlp to look up a link or search and return it as a Song.
-
-        Raises:
-            youtube_dl.utils.DownloadError: If the video can't be loaded.
-            ValueError: If the link is a playlist/page/search with no videos.
-        '''
-        with youtube_dl.YoutubeDL(self.YDL_OPTIONS) as ydl:
-            info = ydl.extract_info(url, download=False)
-
-        # playlists and searches come back as a list of entries; use the first one
-        if 'entries' in info:
-            entries = list(info['entries'])
-            if not entries:
-                raise ValueError("Couldn't find anything to play. Try a different link or song name.")
-            info = entries[0]
-
-        return Song(
-            stream_url=info['url'],
-            title=info.get('title', 'Unknown Title'),
-            webpage_url=info.get('webpage_url', url),
-            thumbnail=info.get('thumbnail'),
-            duration=self._format_duration(info.get('duration')),
-            uploader=info.get('uploader'),
-        )
-
-    @staticmethod
-    def _format_duration(total_seconds: Optional[int]) -> Optional[str]:
-        '''Formats seconds as "m:ss" or "h:mm:ss". Returns None for live streams.'''
-        if total_seconds is None:
-            return None
-
-        minutes, seconds = divmod(total_seconds, 60)
-        if minutes >= 60:
-            hours, minutes = divmod(minutes, 60)
-            return f"{hours}:{minutes:02d}:{seconds:02d}"
-        return f"{minutes}:{seconds:02d}"
-
-    # ==================================================================
     # Queue
     # ==================================================================
 
     def _get_queue(self, guild_id: int) -> Deque[Song]:
         '''Returns the server's queue, creating an empty one if needed.'''
         return self.queues.setdefault(guild_id, deque())
-
-
-class MusicControls(discord.ui.View):
-    '''The buttons under the player message.
-
-    Skip, End, Shuffle and View Queue call the matching handler on MusicPlayer.
-    Pause/Resume is one button that switches between the two.
-    '''
-
-    def __init__(self, musicPlayer: MusicPlayer, paused: bool = False):
-        '''
-        Args:
-            musicPlayer: The MusicPlayer cog the buttons control.
-            paused: Whether the music is paused right now (decides Pause vs Resume).
-        '''
-        super().__init__(timeout=None)
-        self.musicPlayer = musicPlayer
-        self._show_paused(paused)
-
-    def _show_paused(self, paused: bool):
-        '''Makes the toggle look like "Resume" (when paused) or "Pause" (when playing).'''
-        button = self.pause_resume_button
-        if paused:
-            button.label, button.emoji, button.style = "Resume", "▶️", discord.ButtonStyle.green
-        else:
-            button.label, button.emoji, button.style = "Pause", "⏸️", discord.ButtonStyle.gray
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        '''Runs before every button press: only people in Muse's voice channel can control it.
-
-        View Queue is allowed for everyone (it's private and read-only). If Muse isn't in
-        voice, the click goes through so the button can answer "Nothing is playing."
-        '''
-        if interaction.data.get("custom_id") == self.view_queue_button.custom_id:
-            return True
-
-        voice_client = interaction.guild.voice_client
-        if not voice_client:
-            return True
-
-        if not interaction.user.voice or interaction.user.voice.channel != voice_client.channel:
-            await interaction.response.send_message("Join Muse's voice channel to control the music.", ephemeral=True)
-            return False
-
-        return True
-
-    @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple, emoji="⏭️")
-    async def skip_button(self, interaction: discord.Interaction, button: Button):
-        await self.musicPlayer.skip(interaction)
-
-    @discord.ui.button(label="End", style=discord.ButtonStyle.red, emoji="⏹️")
-    async def end_button(self, interaction: discord.Interaction, button: Button):
-        await self.musicPlayer.end(interaction)
-
-    @discord.ui.button(label="Shuffle", style=discord.ButtonStyle.green, emoji="🔀")
-    async def shuffle_button(self, interaction: discord.Interaction, button: Button):
-        await self.musicPlayer.shuffle(interaction)
-
-    @discord.ui.button(label="View Queue", style=discord.ButtonStyle.green, emoji="📜")
-    async def view_queue_button(self, interaction: discord.Interaction, button: Button):
-        await self.musicPlayer.view_queue(interaction)
-
-    @discord.ui.button(label="Pause", style=discord.ButtonStyle.gray, emoji="⏸️")
-    async def pause_resume_button(self, interaction: discord.Interaction, button: Button):
-        '''Pauses if playing, resumes if paused, and updates the player to match.'''
-        guild_id = interaction.guild.id
-        voice_client = interaction.guild.voice_client
-        song = self.musicPlayer.current_audio.get(guild_id)
-
-        # decide by the real state, not the button label (labels on old messages can be stale)
-        if voice_client and voice_client.is_paused():
-            voice_client.resume()
-            paused = False
-        elif voice_client and voice_client.is_playing():
-            voice_client.pause()
-            paused = True
-        else:
-            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
-            return
-
-        self._show_paused(paused)
-        await interaction.response.edit_message(
-            embed=self.musicPlayer._now_playing_embed(song, guild_id, paused=paused),
-            view=self
-        )
-
-
-async def setup(bot):
-    await bot.add_cog(MusicPlayer(bot))

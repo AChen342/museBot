@@ -33,7 +33,7 @@ async def on_ready():
 # load cog
 async def main():
     async with bot:
-        await bot.load_extension("musicPlayer")
+        await bot.load_extension("music")
         await bot.start(TOKEN)
 
 # requires bot token to run
