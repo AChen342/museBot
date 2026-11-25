@@ -63,8 +63,8 @@ class MusicPlayer(commands.Cog):
         'options': '-vn -af loudnorm=I=-16:LRA=11:TP=-1.5 -c:a libopus -b:a 128k -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
     }
 
-    # used to disconnect bot when idle
-    IDLE_TIMEOUT = 300 # change as needed default is 300s (5 minutes)
+    # Leave voice after this many seconds with nothing playing (use ~20 while testing)
+    IDLE_TIMEOUT = 300
 
     # Options for yt_dlp
     YDL_OPTIONS = {
@@ -89,11 +89,12 @@ class MusicPlayer(commands.Cog):
         self.queues: dict[int, Deque[Song]] = {}               # songs waiting to play
         self.current_audio: dict[int, Song] = {}               # the song playing right now
         self.player_messages: dict[int, discord.Message] = {}  # the live player message
-        self.idle_timers: dict[int, asyncio.Task] = {}
+        self.idle_timers: dict[int, asyncio.Task] = {}         # countdown to leave when idle
 
     # ==================================================================
     # Events
     # ==================================================================
+
     @commands.Cog.listener()
     async def on_ready(self):
         '''Registers the slash commands with Discord when the bot starts.'''
@@ -134,54 +135,11 @@ class MusicPlayer(commands.Cog):
     # ==================================================================
     # Slash commands
     # ==================================================================
-    
-    @app_commands.command(name="remove", description="remove a song from queue")
-    @app_commands.describe(index="The song position in the queue")
-    async def remove(self, interaction: discord.Interaction, index: app_commands.Range[int, 1, 100]):
-        '''Removes song from the queue based on the index
-        
-        Args:
-            index: The position of the song being removed
-        '''
-        if not interaction.user.voice:
-            await interaction.response.send_message(
-                "You need to be in a voice chat to use this command.",
-                ephemeral=True
-            )
-            return
-
-        voice_client = interaction.guild.voice_client
-        if not voice_client:
-            await interaction.response.send_message("Muse isn't playing anything right now.", ephemeral=True)
-            return
-
-        if interaction.user.voice.channel != interaction.guild.voice_client.channel:
-            await interaction.response.send_message(
-                "Join Muse's voice channel to use this command.",
-                ephemeral=True
-            )
-            return
-
-        guild_id = interaction.guild_id        
-        server_queue = self._get_queue(guild_id)
-        
-        # check if index is within bounds
-        if index < 1 or index > len(server_queue):
-            await interaction.response.send_message(
-                f"There's no song #{index} in the queue. Check View Queue for the numbers.",
-                ephemeral=True
-            )
-            return
-
-        removed = server_queue[index - 1]
-        del server_queue[index - 1]
-        await interaction.response.send_message(f"{interaction.user.display_name} removed \"{removed.title}\" from the queue.")        
-        await self._update_player(guild_id, interaction.channel, paused=voice_client.is_paused())
 
     @app_commands.command(name="play", description="play a YouTube link or search for a song")
     @app_commands.describe(query="A YouTube link or a song name")
     async def play(self, interaction: discord.Interaction, query: str):
-        '''Plays a YouTube link, or searches YouTube and plays the best match.
+        '''Adds a song to the end of the queue, joining the user's voice channel if needed.
 
         Args:
             query: A YouTube link (with or without https://) or a song name
@@ -207,31 +165,62 @@ class MusicPlayer(commands.Cog):
             if voice_client.channel != user_voice_channel:
                 await voice_client.move_to(user_voice_channel)
 
-            # a link plays directly; anything else becomes a YouTube search.
-            # The lookup runs in a background thread so the bot doesn't freeze meanwhile.
-            source = self._identify_song_input(query)
-            song = await asyncio.to_thread(self._extract_audio, source)
-            song.requester = interaction.user.mention
-
-            self._get_queue(guild_id).append(song)
-            await interaction.followup.send(f"{interaction.user.display_name} added \"{song.title}\" to queue.")
-
-            if not voice_client.is_playing() and not voice_client.is_paused():
-                # nothing playing yet: start this song
-                await self.play_next(interaction)
-            else:
-                # something is already playing: just refresh "Up next" on the player
-                await self._update_player(guild_id, interaction.channel, paused=voice_client.is_paused())
-
-        except youtube_dl.utils.DownloadError:  # video is private, deleted, restricted, etc.
-            await interaction.followup.send(
-                "Couldn't load that link. It may be privated, deleted, restricted or not a valid video."
-            )
-            await self._leave_if_idle(guild_id, voice_client)
+            added = await self._add_song(interaction, query)
+            if not added:
+                # the bot may have joined just for this song; don't leave it sitting there
+                await self._leave_if_idle(guild_id, voice_client)
 
         except Exception as e:  # catches any other error
             await interaction.followup.send(f"Error: {str(e)}")
             await self._leave_if_idle(guild_id, voice_client)
+
+    @app_commands.command(name="playnext", description="play a YouTube link or song right after the current one")
+    @app_commands.describe(query="A YouTube link or a song name")
+    async def playnext(self, interaction: discord.Interaction, query: str):
+        '''Adds a song to the front of the queue, so it plays right after the current one.
+
+        Unlike /play, Muse must already be in the user's voice channel.
+
+        Args:
+            query: A YouTube link (with or without https://) or a song name
+        '''
+        if not await self._check_listener(interaction):
+            return
+
+        try:
+            # looking up a song takes a few seconds; tell Discord we're working on it
+            await interaction.response.defer()
+            await self._add_song(interaction, query, to_front=True)
+
+        except Exception as e:  # catches any other error
+            await interaction.followup.send(f"Error: {str(e)}")
+
+    @app_commands.command(name="remove", description="remove a song from the queue")
+    @app_commands.describe(index="The song's number in View Queue")
+    async def remove(self, interaction: discord.Interaction, index: app_commands.Range[int, 1, 100]):
+        '''Removes one song from the queue, using the numbers shown in View Queue.
+
+        Args:
+            index: The song's position in the queue (1 = plays next)
+        '''
+        if not await self._check_listener(interaction):
+            return
+
+        server_queue = self._get_queue(interaction.guild.id)
+        if index > len(server_queue):
+            await interaction.response.send_message(
+                f"There's no song #{index} in the queue. Check View Queue for the numbers.",
+                ephemeral=True
+            )
+            return
+
+        removed = server_queue[index - 1]
+        del server_queue[index - 1]
+
+        await interaction.response.send_message(
+            f"{interaction.user.display_name} removed \"{removed.title}\" from the queue."
+        )
+        await self._refresh_player(interaction)
 
     @app_commands.command(name="options", description="brings up music player interface")
     async def options(self, interaction: discord.Interaction):
@@ -240,15 +229,14 @@ class MusicPlayer(commands.Cog):
         voice_client = interaction.guild.voice_client
 
         if not voice_client:
-            await interaction.response.send_message("Muse is not connected to a voice chat", ephemeral=True)
+            await interaction.response.send_message("Muse is not connected to a voice chat.", ephemeral=True)
             return
 
-        current = self.current_audio.get(guild_id)
-        if current is None or not (voice_client.is_playing() or voice_client.is_paused()):
+        if self.current_audio.get(guild_id) is None or not self._is_active(voice_client):
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
 
-        # delete the old player; _update_player then posts a fresh one at the bottom
+        # delete the old player; _refresh_player then posts a fresh one at the bottom
         old_message = self.player_messages.pop(guild_id, None)
         if old_message:
             try:
@@ -256,36 +244,19 @@ class MusicPlayer(commands.Cog):
             except discord.HTTPException:
                 pass  # already deleted
 
-        await self._update_player(guild_id, interaction.channel, paused=voice_client.is_paused())
-        await interaction.response.send_message("Player moved to the bottom", ephemeral=True)
+        await self._refresh_player(interaction)
+        await interaction.response.send_message("Player moved to the bottom.", ephemeral=True)
 
     # ==================================================================
     # Button handlers (called by MusicControls)
     # ==================================================================
-    async def shuffle(self, interaction: discord.Interaction):
-        '''
-        Shuffle button: looks at current queue and shuffles it, also updates the up next
-        '''
-        guild_id = interaction.guild.id
-        queue = self._get_queue(guild_id)
-
-        if len(queue) < 2:
-            await interaction.response.send_message("Not enough songs in the queue to shuffle.", ephemeral=True)
-            return
-        
-        random.shuffle(queue) # shuffle the server queue
-
-        # update the embed card
-        paused = interaction.guild.voice_client.is_paused()
-        new_embed = self._now_playing_embed(self.current_audio.get(guild_id), guild_id, paused=paused)
-        await interaction.response.edit_message(embed=new_embed, view=MusicControls(self, paused=paused))
 
     async def skip(self, interaction: discord.Interaction):
         '''Skip button: stops the current song. The next one (if any) starts automatically.'''
         guild_id = interaction.guild.id
         voice_client = interaction.guild.voice_client
 
-        if not (voice_client and (voice_client.is_playing() or voice_client.is_paused())):
+        if not self._is_active(voice_client):
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
 
@@ -306,7 +277,7 @@ class MusicPlayer(commands.Cog):
 
             if not voice_client or not voice_client.is_connected():
                 await interaction.response.send_message(
-                    "I'm not connected to any voice channel",
+                    "I'm not connected to any voice channel.",
                     ephemeral=True
                 )
                 return
@@ -315,7 +286,7 @@ class MusicPlayer(commands.Cog):
 
             user = interaction.user.display_name
             await interaction.response.send_message(
-                f"{user} stopped playback and disconnected bot from voice channel"
+                f"{user} stopped playback and disconnected bot from voice channel."
             )
 
         except Exception as e:
@@ -323,52 +294,142 @@ class MusicPlayer(commands.Cog):
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"Error: {e}", ephemeral=True)
 
+    async def shuffle(self, interaction: discord.Interaction):
+        '''Shuffle button: shuffles the upcoming songs and updates "Up next" on the player.'''
+        guild_id = interaction.guild.id
+        server_queue = self._get_queue(guild_id)
+
+        if len(server_queue) < 2:
+            await interaction.response.send_message("Not enough songs in the queue to shuffle.", ephemeral=True)
+            return
+
+        random.shuffle(server_queue)  # shuffles in place
+
+        voice_client = interaction.guild.voice_client
+        paused = bool(voice_client and voice_client.is_paused())
+        await interaction.response.edit_message(
+            embed=self._now_playing_embed(self.current_audio.get(guild_id), guild_id, paused=paused),
+            view=MusicControls(self, paused=paused)
+        )
+
     async def view_queue(self, interaction: discord.Interaction):
         '''View Queue button: privately shows the next five songs.'''
-        queue = self._get_queue(interaction.guild.id)
+        server_queue = self._get_queue(interaction.guild.id)
         embed = discord.Embed(
             title="Next on your queue",
             description="Displays next five songs in your queue.",
             color=discord.Color.purple()
         )
 
-        if not queue:
+        if not server_queue:
             msg = "Your queue is empty."
         else:
             msg = ""
-            for i, song in enumerate(list(queue)[:5], start=1):
-                msg += f"{i}. {song.title} ({song.duration})\n"
+            for i, song in enumerate(list(server_queue)[:5], start=1):
+                msg += f"{i}. {song.title} ({song.duration or 'Live'})\n"
 
         embed.add_field(name="Upcoming:", value=msg, inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ==================================================================
+    # Shared checks
+    # ==================================================================
+
+    @staticmethod
+    def _is_active(voice_client: Optional[discord.VoiceClient]) -> bool:
+        '''True if Muse is connected and a song is playing or paused.'''
+        return bool(voice_client and (voice_client.is_playing() or voice_client.is_paused()))
+
+    async def _check_listener(self, interaction: discord.Interaction) -> bool:
+        '''Makes sure the user is in Muse's voice channel before changing the queue.
+
+        Returns True if they are. Otherwise privately tells them why not and returns False.
+        '''
+        voice_client = interaction.guild.voice_client
+
+        if not interaction.user.voice:
+            problem = "You need to be in a voice chat to use this command."
+        elif not voice_client:
+            problem = "Muse isn't playing anything right now."
+        elif interaction.user.voice.channel != voice_client.channel:
+            problem = "Join Muse's voice channel to use this command."
+        else:
+            return True
+
+        await interaction.response.send_message(problem, ephemeral=True)
+        return False
+
+    # ==================================================================
     # Playback
     # ==================================================================
+
+    async def _add_song(self, interaction: discord.Interaction, query: str, to_front: bool = False) -> bool:
+        '''Looks up a song and adds it to the queue, then starts it or refreshes the player.
+
+        Used by /play (end of the queue) and /playnext (front of the queue).
+        The interaction must already be deferred.
+
+        Returns True if the song was added. If it couldn't be found, tells the user and returns False.
+        '''
+        guild_id = interaction.guild.id
+        voice_client = interaction.guild.voice_client
+
+        # a link plays directly; anything else becomes a YouTube search.
+        # The lookup runs in a background thread so the bot doesn't freeze meanwhile.
+        try:
+            source = self._identify_song_input(query)
+            song = await asyncio.to_thread(self._extract_audio, source)
+        except youtube_dl.utils.DownloadError:  # video is private, deleted, restricted, etc.
+            await interaction.followup.send(
+                "Couldn't load that link. It may be privated, deleted, restricted or not a valid video."
+            )
+            return False
+        except ValueError as e:  # a playlist, page or search with nothing in it
+            await interaction.followup.send(str(e))
+            return False
+
+        song.requester = interaction.user.mention
+        server_queue = self._get_queue(guild_id)
+        user = interaction.user.display_name
+
+        if to_front:
+            server_queue.appendleft(song)
+            await interaction.followup.send(f"{user} added \"{song.title}\" to play next.")
+        else:
+            server_queue.append(song)
+            await interaction.followup.send(f"{user} added \"{song.title}\" to queue.")
+
+        if self._is_active(voice_client):
+            # something is already playing: just refresh "Up next" on the player
+            await self._refresh_player(interaction)
+        else:
+            # nothing playing yet: start this song
+            await self.play_next(interaction)
+
+        return True
 
     async def play_next(self, interaction: discord.Interaction, error=None):
         '''Starts the next song in the server's queue.
 
-        Runs when /play starts the first song, and again every time a song ends
-        (through after_playing below), so the queue keeps going by itself.
+        Runs when /play or /playnext starts the first song, and again every time
+        a song ends (through after_playing below), so the queue keeps going by itself.
 
         Args:
-            interaction: The /play interaction that started this session.
+            interaction: The interaction that started this session.
             error: An error from the song that just finished, if any.
         '''
         if error:
             await interaction.channel.send(f"Playback error: {error}")
 
-        voice_client = interaction.guild.voice_client
         guild_id = interaction.guild.id
+        voice_client = interaction.guild.voice_client
 
-        # queue is empty: the session is over
+        # queue is empty: the session is over (but stay in voice a while in case more songs come)
         server_queue = self.queues.get(guild_id)
         if not server_queue:
             await self._reset_state(guild_id, "Queue finished, use /play to add more")
             if voice_client and voice_client.is_connected():
                 self._start_idle_timer(interaction.guild)
-
             return
 
         # Muse is no longer in voice (e.g. kicked): clean up instead of trying every song
@@ -433,6 +494,15 @@ class MusicPlayer(commands.Cog):
 
         return embed
 
+    async def _refresh_player(self, interaction: discord.Interaction):
+        '''Updates the player for the interaction's server, if a song is playing or paused.
+
+        Used after the queue changes (a song is added or removed) or the player is moved.
+        '''
+        voice_client = interaction.guild.voice_client
+        if self._is_active(voice_client) and self.current_audio.get(interaction.guild.id):
+            await self._update_player(interaction.guild.id, interaction.channel, paused=voice_client.is_paused())
+
     async def _update_player(self, guild_id: int, channel, paused: bool = False):
         '''Shows the current song on the server's player message.
 
@@ -481,34 +551,29 @@ class MusicPlayer(commands.Cog):
     # ==================================================================
     # Session cleanup
     # ==================================================================
-    def _cancel_idle_timer(self, guild_id):
-        '''
-        Cancels bot timeout timer
-        '''
+
+    def _start_idle_timer(self, guild: discord.Guild):
+        '''Starts the countdown to leave voice (replacing any countdown already running).'''
+        self._cancel_idle_timer(guild.id)
+        self.idle_timers[guild.id] = asyncio.create_task(self._leave_after_idle(guild))
+
+    def _cancel_idle_timer(self, guild_id: int):
+        '''Stops the countdown to leave voice, if one is running.'''
         timer = self.idle_timers.pop(guild_id, None)
         if timer:
             timer.cancel()
 
-    def _start_idle_timer(self, guild):
-        '''
-        Starts timeout timer when bot starts idling
-        '''
-        self._cancel_idle_timer(guild.id) # cancels existing timer
-        self.idle_timers[guild.id] = asyncio.create_task(self._leave_after_idle(guild))
-
-    async def _leave_after_idle(self, guild):
-        '''
-        After timer finishes, cleanly disconnect the bot
-        '''
+    async def _leave_after_idle(self, guild: discord.Guild):
+        '''The countdown itself: waits IDLE_TIMEOUT seconds, then leaves if still idle.'''
         await asyncio.sleep(self.IDLE_TIMEOUT)
-        self.idle_timers.pop(guild.id, None)
-        voice_client = guild.voice_client
+        self.idle_timers.pop(guild.id, None)  # this timer is done; forget it before cleaning up
 
-        if voice_client and voice_client.is_connected() and not (voice_client.is_playing() or voice_client.is_paused()):
+        voice_client = guild.voice_client
+        if voice_client and voice_client.is_connected() and not self._is_active(voice_client):
             await self._reset_and_disconnect(guild.id, voice_client)
 
     async def _reset_state(self, guild_id: int, text: str):
-        '''Forgets this server's music session: clears the queue and current song,
+        '''Forgets this server's music session: clears the queue, current song and idle timer,
         and closes the player message with `text`.
 
         Safe to call more than once: if everything is already cleared, it does nothing.
@@ -528,8 +593,8 @@ class MusicPlayer(commands.Cog):
         await voice_client.disconnect()
 
     async def _leave_if_idle(self, guild_id: int, voice_client: Optional[discord.VoiceClient]):
-        '''Disconnects only if the bot is connected and not playing or paused.'''
-        if voice_client and not (voice_client.is_playing() or voice_client.is_paused()):
+        '''Disconnects right away, but only if the bot is connected and nothing is playing or paused.'''
+        if voice_client and not self._is_active(voice_client):
             await self._reset_and_disconnect(guild_id, voice_client)
 
     # ==================================================================
@@ -607,7 +672,7 @@ class MusicPlayer(commands.Cog):
 class MusicControls(discord.ui.View):
     '''The buttons under the player message.
 
-    Skip, End and View Queue call the matching handler on MusicPlayer.
+    Skip, End, Shuffle and View Queue call the matching handler on MusicPlayer.
     Pause/Resume is one button that switches between the two.
     '''
 
@@ -630,6 +695,11 @@ class MusicControls(discord.ui.View):
             button.label, button.emoji, button.style = "Pause", "⏸️", discord.ButtonStyle.gray
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        '''Runs before every button press: only people in Muse's voice channel can control it.
+
+        View Queue is allowed for everyone (it's private and read-only). If Muse isn't in
+        voice, the click goes through so the button can answer "Nothing is playing."
+        '''
         if interaction.data.get("custom_id") == self.view_queue_button.custom_id:
             return True
 
@@ -637,10 +707,10 @@ class MusicControls(discord.ui.View):
         if not voice_client:
             return True
 
-        if (not interaction.user.voice) or interaction.user.voice.channel != voice_client.channel:
+        if not interaction.user.voice or interaction.user.voice.channel != voice_client.channel:
             await interaction.response.send_message("Join Muse's voice channel to control the music.", ephemeral=True)
             return False
-        
+
         return True
 
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple, emoji="⏭️")
@@ -652,7 +722,7 @@ class MusicControls(discord.ui.View):
         await self.musicPlayer.end(interaction)
 
     @discord.ui.button(label="Shuffle", style=discord.ButtonStyle.green, emoji="🔀")
-    async def shuffle_button(self, interaction:discord.Interaction, button: Button):
+    async def shuffle_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.shuffle(interaction)
 
     @discord.ui.button(label="View Queue", style=discord.ButtonStyle.green, emoji="📜")
