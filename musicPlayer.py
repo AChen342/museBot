@@ -62,6 +62,9 @@ class MusicPlayer(commands.Cog):
         'options': '-vn -af loudnorm=I=-16:LRA=11:TP=-1.5 -c:a libopus -b:a 128k -ar 48000 -ac 2 -application lowdelay -bufsize 256k'
     }
 
+    # used to disconnect bot when idle
+    IDLE_TIMEOUT = 20 # change as needed default is 300s (5 minutes)
+
     # Options for yt_dlp
     YDL_OPTIONS = {
         'format': 'bestaudio/best',
@@ -85,6 +88,7 @@ class MusicPlayer(commands.Cog):
         self.queues: dict[int, Deque[Song]] = {}               # songs waiting to play
         self.current_audio: dict[int, Song] = {}               # the song playing right now
         self.player_messages: dict[int, discord.Message] = {}  # the live player message
+        self.idle_timers: dict[int, asyncio.Task] = {}
 
     # ==================================================================
     # Events
@@ -301,6 +305,9 @@ class MusicPlayer(commands.Cog):
         server_queue = self.queues.get(guild_id)
         if not server_queue:
             await self._reset_state(guild_id, "Queue finished, use /play to add more")
+            if voice_client and voice_client.is_connected():
+                self._start_idle_timer(interaction.guild)
+
             return
 
         # Muse is no longer in voice (e.g. kicked): clean up instead of trying every song
@@ -326,6 +333,7 @@ class MusicPlayer(commands.Cog):
         try:
             source = await discord.FFmpegOpusAudio.from_probe(song.stream_url, **self.FFMPEG_OPTIONS)
             voice_client.play(source, after=after_playing)
+            self._cancel_idle_timer(guild_id)
 
         except Exception as e:
             # this song can't be played (e.g. its link expired): skip it so the queue doesn't freeze
@@ -413,6 +421,31 @@ class MusicPlayer(commands.Cog):
     # ==================================================================
     # Session cleanup
     # ==================================================================
+    def _cancel_idle_timer(self, guild_id):
+        '''
+        Cancels bot timeout timer
+        '''
+        timer = self.idle_timer.pop(guild_id, None)
+        if timer:
+            timer.cancel()
+
+    def _start_idle_timer(self, guild):
+        '''
+        Starts timeout timer when bot starts idling
+        '''
+        self._cancel_idle_timer(guild) # cancels existing timer
+        self.idle_timer[guild.id] = asyncio.create_task(self._leave_after_idle(guild))
+
+    async def _leave_after_idle(self, guild):
+        '''
+        After timer finishes, cleanly disconnect the bot
+        '''
+        await asyncio.sleep(self.IDLE_TIMEOUT)
+        self.idle_timers.pop(guild.id, None)
+        voice_client = guild.voice_client
+
+        if voice_client and voice_client.is_connected() and not (voice_client.is_playing() and voice_client.is_paused()):
+            await self._reset_and_disconnect(guild.id, voice_client)
 
     async def _reset_state(self, guild_id: int, text: str):
         '''Forgets this server's music session: clears the queue and current song,
@@ -422,6 +455,7 @@ class MusicPlayer(commands.Cog):
         '''
         self._get_queue(guild_id).clear()
         self.current_audio.pop(guild_id, None)
+        self._cancel_idle_timer(guild_id)
         await self._close_player(guild_id, text)
 
     async def _reset_and_disconnect(self, guild_id: int, voice_client: discord.VoiceClient):
