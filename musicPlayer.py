@@ -11,6 +11,7 @@ How this file is laid out:
 '''
 import asyncio
 import os
+import random
 import re
 from collections import deque
 from dataclasses import dataclass
@@ -219,6 +220,23 @@ class MusicPlayer(commands.Cog):
     # ==================================================================
     # Button handlers (called by MusicControls)
     # ==================================================================
+    async def shuffle(self, interaction: discord.Interaction):
+        '''
+        Shuffle button: looks at current queue and shuffles it, also updates the up next
+        '''
+        guild_id = interaction.guild.id
+        queue = self._get_queue(guild_id)
+
+        if len(queue) < 2:
+            await interaction.response.send_message("Not enough songs in the queue to shuffle.", ephemeral=True)
+            return
+        
+        random.shuffle(queue) # shuffle the server queue
+
+        # update the embed card
+        paused = interaction.guild.voice_client.is_paused()
+        new_embed = self._now_playing_embed(self.current_audio.get(guild_id), guild_id, paused=paused)
+        await interaction.response.edit_message(embed=new_embed, view=MusicControls(self, paused=paused))
 
     async def skip(self, interaction: discord.Interaction):
         '''Skip button: stops the current song. The next one (if any) starts automatically.'''
@@ -590,6 +608,10 @@ class MusicControls(discord.ui.View):
     @discord.ui.button(label="End", style=discord.ButtonStyle.red, emoji="⏹️")
     async def end_button(self, interaction: discord.Interaction, button: Button):
         await self.musicPlayer.end(interaction)
+
+    @discord.ui.button(label="Shuffle", style=discord.ButtonStyle.green, emoji="🔀")
+    async def shuffle_button(self, interaction:discord.Interaction, button: Button):
+        await self.musicPlayer.shuffle(interaction)
 
     @discord.ui.button(label="View Queue", style=discord.ButtonStyle.green, emoji="📜")
     async def view_queue_button(self, interaction: discord.Interaction, button: Button):
